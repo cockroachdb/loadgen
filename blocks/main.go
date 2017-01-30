@@ -18,7 +18,6 @@ package main
 import (
 	"bytes"
 	"database/sql"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -35,6 +34,7 @@ import (
 	mgo "gopkg.in/mgo.v2"
 
 	"github.com/codahale/hdrhistogram"
+	"github.com/gocql/gocql"
 	"github.com/satori/go.uuid"
 	// Import postgres driver.
 	_ "github.com/lib/pq"
@@ -136,12 +136,12 @@ func (c *cockroach) write(writerID string, blockNum int64, blockCount int, r *ra
 	const insertBlockStmt = `INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`
 
 	var buf bytes.Buffer
-	var args []interface{}
+	args := make([]interface{}, blockCount)
 	fmt.Fprintf(&buf, "%s", insertBlockStmt)
 
 	for i := 0; i < blockCount; i++ {
 		blockID := r.Int63()
-		args = append(args, randomBlock(r))
+		args[i] = randomBlock(r)
 		if i > 0 {
 			fmt.Fprintf(&buf, ",")
 		}
@@ -227,8 +227,49 @@ func setupMongo(parsedURL *url.URL) (database, error) {
 	return &mongo{blocks: blocks}, nil
 }
 
+type cassandra struct {
+	session *gocql.Session
+}
+
+func (c *cassandra) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
+	const insertBlockStmt = `INSERT INTO datablocks.blocks ` +
+		`(block_id, writer_id, block_num, raw_bytes) VALUES (?, ?, ?, ?)`
+	return c.session.Query(insertBlockStmt, r.Int63(), writerID, blockNum, randomBlock(r)).Exec()
+}
+
 func setupCassandra(parsedURL *url.URL) (database, error) {
-	return nil, errors.New("unsupported")
+	if *batch != 1 {
+		return nil, fmt.Errorf("unsupported --batch size: %d", *batch)
+	}
+
+	cluster := gocql.NewCluster(parsedURL.Host)
+	cluster.Consistency = gocql.Quorum
+	s, err := cluster.CreateSession()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	const createKeyspace = `
+CREATE KEYSPACE IF NOT EXISTS datablocks WITH REPLICATION = {
+  'class' : 'SimpleStrategy',
+  'replication_factor' : 1
+};`
+	const createTable = `
+CREATE TABLE IF NOT EXISTS datablocks.blocks(
+  block_id BIGINT,
+  writer_id TEXT,
+  block_num BIGINT,
+  raw_bytes BLOB,
+  PRIMARY KEY(block_id, writer_id, block_num)
+);`
+
+	if err := s.Query(createKeyspace).RetryPolicy(nil).Exec(); err != nil {
+		log.Fatal(err)
+	}
+	if err := s.Query(createTable).RetryPolicy(nil).Exec(); err != nil {
+		log.Fatal(err)
+	}
+	return &cassandra{session: s}, nil
 }
 
 // setupDatabase performs initial setup for the example, creating a database and
@@ -242,7 +283,7 @@ func setupDatabase(dbURL string) (database, error) {
 	parsedURL.Path = "datablocks"
 
 	switch parsedURL.Scheme {
-	case "postgresql":
+	case "postgres", "postgresql":
 		return setupCockroach(parsedURL)
 	case "mongodb":
 		return setupMongo(parsedURL)
@@ -263,7 +304,7 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
-	dbURL := "postgresql://root@localhost:26257/photos?sslmode=disable"
+	dbURL := "postgres://root@localhost:26257/photos?sslmode=disable"
 	if flag.NArg() == 1 {
 		dbURL = flag.Arg(0)
 	}
