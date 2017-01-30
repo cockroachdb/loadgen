@@ -18,6 +18,7 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -66,8 +67,21 @@ var benchmarkName = flag.String("benchmark-name", "BenchmarkBlocks", "Test name 
 // numBlocks keeps a global count of successfully written blocks.
 var numBlocks uint64
 
+func randomBlock(r *rand.Rand) []byte {
+	blockSize := r.Intn(*maxBlockSizeBytes-*minBlockSizeBytes) + *minBlockSizeBytes
+	blockData := make([]byte, blockSize)
+	for i := range blockData {
+		blockData[i] = byte(r.Int() & 0xff)
+	}
+	return blockData
+}
+
+type database interface {
+	write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error
+}
+
 type blocker struct {
-	db      *sql.DB
+	db      database
 	rand    *rand.Rand
 	latency struct {
 		sync.Mutex
@@ -75,7 +89,7 @@ type blocker struct {
 	}
 }
 
-func newBlocker(db *sql.DB) *blocker {
+func newBlocker(db database) *blocker {
 	b := &blocker{
 		db:   db,
 		rand: rand.New(rand.NewSource(int64(time.Now().UnixNano()))),
@@ -92,26 +106,10 @@ func newBlocker(db *sql.DB) *blocker {
 func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	id := uuid.NewV4().String()
-	var blockCount uint64
-
-	for {
-		var buf bytes.Buffer
-		var args []interface{}
-		fmt.Fprintf(&buf, "%s", insertBlockStmt)
-
-		for i := 0; i < *batch; i++ {
-			blockID := b.rand.Int63()
-			blockCount++
-			args = append(args, b.randomBlock())
-			if i > 0 {
-				fmt.Fprintf(&buf, ",")
-			}
-			fmt.Fprintf(&buf, ` (%d, '%s', %d, $%d)`, blockID, id, blockCount, i+1)
-		}
-
+	writerID := uuid.NewV4().String()
+	for blockNum := int64(0); ; blockNum += int64(*batch) {
 		start := time.Now()
-		if _, err := b.db.Exec(buf.String(), args...); err != nil {
+		if err := b.db.write(writerID, blockNum, *batch, b.rand); err != nil {
 			errCh <- err
 		} else {
 			elapsed := time.Since(start)
@@ -128,25 +126,31 @@ func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup) {
 	}
 }
 
-func (b *blocker) randomBlock() []byte {
-	blockSize := b.rand.Intn(*maxBlockSizeBytes-*minBlockSizeBytes) + *minBlockSizeBytes
-	blockData := make([]byte, blockSize)
-	for i := range blockData {
-		blockData[i] = byte(b.rand.Int() & 0xff)
-	}
-	return blockData
+type cockroach struct {
+	db *sql.DB
 }
 
-// setupDatabase performs initial setup for the example, creating a database and
-// with a single table. If the desired table already exists on the cluster, the
-// existing table will be dropped.
-func setupDatabase(dbURL string) (*sql.DB, error) {
-	parsedURL, err := url.Parse(dbURL)
-	if err != nil {
-		return nil, err
-	}
-	parsedURL.Path = "datablocks"
+func (c *cockroach) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
+	const insertBlockStmt = `INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`
 
+	var buf bytes.Buffer
+	var args []interface{}
+	fmt.Fprintf(&buf, "%s", insertBlockStmt)
+
+	for i := 0; i < blockCount; i++ {
+		blockID := r.Int63()
+		args = append(args, randomBlock(r))
+		if i > 0 {
+			fmt.Fprintf(&buf, ",")
+		}
+		fmt.Fprintf(&buf, ` (%d, '%s', %d, $%d)`, blockID, writerID, blockNum+int64(i), i+1)
+	}
+
+	_, err := c.db.Exec(buf.String(), args...)
+	return err
+}
+
+func setupCockroach(parsedURL *url.URL) (database, error) {
 	// Open connection to server and create a database.
 	db, err := sql.Open("postgres", parsedURL.String())
 	if err != nil {
@@ -181,7 +185,37 @@ func setupDatabase(dbURL string) (*sql.DB, error) {
 		}
 	}
 
-	return db, nil
+	return &cockroach{db: db}, nil
+}
+
+func setupMongo(parsedURL *url.URL) (database, error) {
+	return nil, errors.New("unsupported")
+}
+
+func setupCassandra(parsedURL *url.URL) (database, error) {
+	return nil, errors.New("unsupported")
+}
+
+// setupDatabase performs initial setup for the example, creating a database and
+// with a single table. If the desired table already exists on the cluster, the
+// existing table will be dropped.
+func setupDatabase(dbURL string) (database, error) {
+	parsedURL, err := url.Parse(dbURL)
+	if err != nil {
+		return nil, err
+	}
+	parsedURL.Path = "datablocks"
+
+	switch parsedURL.Scheme {
+	case "postgresql":
+		return setupCockroach(parsedURL)
+	case "mongodb":
+		return setupMongo(parsedURL)
+	case "cassandra":
+		return setupCassandra(parsedURL)
+	default:
+		return nil, fmt.Errorf("unsupported database: %s", parsedURL.Scheme)
+	}
 }
 
 var usage = func() {
@@ -207,7 +241,7 @@ func main() {
 		log.Fatalf("Value of 'max-block-bytes' (%d) must be greater than or equal to value of 'min-block-bytes' (%d)", max, min)
 	}
 
-	var db *sql.DB
+	var db database
 	{
 		var err error
 		for err == nil || *tolerateErrors {
@@ -258,7 +292,7 @@ func main() {
 			*benchmarkName, numBlocks, float64(elapsed.Nanoseconds())/float64(numBlocks))
 	}()
 
-	for i := 0; true; {
+	for i := 0; ; {
 		select {
 		case err := <-errCh:
 			numErr++
