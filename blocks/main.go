@@ -129,25 +129,20 @@ func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup) {
 }
 
 type cockroach struct {
-	db *sql.DB
+	db   *sql.DB
+	stmt *sql.Stmt
 }
 
 func (c *cockroach) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
-	var buf bytes.Buffer
-	args := make([]interface{}, blockCount)
-	_, _ = buf.WriteString(
-		`INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`)
-
+	args := make([]interface{}, 4*blockCount)
 	for i := 0; i < blockCount; i++ {
-		blockID := r.Int63()
-		args[i] = randomBlock(r)
-		if i > 0 {
-			_, _ = buf.WriteString(", ")
-		}
-		fmt.Fprintf(&buf, ` (%d, '%s', %d, $%d)`, blockID, writerID, blockNum+int64(i), i+1)
+		j := i * 4
+		args[j+0] = r.Int63()
+		args[j+1] = writerID
+		args[j+2] = blockNum + int64(i)
+		args[j+3] = randomBlock(r)
 	}
-
-	_, err := c.db.Exec(buf.String(), args...)
+	_, err := c.stmt.Exec(args...)
 	return err
 }
 
@@ -186,7 +181,24 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 		}
 	}
 
-	return &cockroach{db: db}, nil
+	var buf bytes.Buffer
+	_, _ = buf.WriteString(
+		`INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`)
+
+	for i := 0; i < *batch; i++ {
+		j := i * 4
+		if i > 0 {
+			_, _ = buf.WriteString(", ")
+		}
+		fmt.Fprintf(&buf, ` ($%d, $%d, $%d, $%d)`, j+1, j+2, j+3, j+4)
+	}
+
+	stmt, err := db.Prepare(buf.String())
+	if err != nil {
+		return nil, err
+	}
+
+	return &cockroach{db: db, stmt: stmt}, nil
 }
 
 type mongo struct {
