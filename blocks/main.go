@@ -133,17 +133,16 @@ type cockroach struct {
 }
 
 func (c *cockroach) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
-	const insertBlockStmt = `INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`
-
 	var buf bytes.Buffer
 	args := make([]interface{}, blockCount)
-	fmt.Fprintf(&buf, "%s", insertBlockStmt)
+	_, _ = buf.WriteString(
+		`INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`)
 
 	for i := 0; i < blockCount; i++ {
 		blockID := r.Int63()
 		args[i] = randomBlock(r)
 		if i > 0 {
-			fmt.Fprintf(&buf, ",")
+			_, _ = buf.WriteString(", ")
 		}
 		fmt.Fprintf(&buf, ` (%d, '%s', %d, $%d)`, blockID, writerID, blockNum+int64(i), i+1)
 	}
@@ -232,16 +231,27 @@ type cassandra struct {
 }
 
 func (c *cassandra) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
-	const insertBlockStmt = `INSERT INTO datablocks.blocks ` +
-		`(block_id, writer_id, block_num, raw_bytes) VALUES (?, ?, ?, ?)`
-	return c.session.Query(insertBlockStmt, r.Int63(), writerID, blockNum, randomBlock(r)).Exec()
+	const insertBlockStmt = "INSERT INTO datablocks.blocks " +
+		"(block_id, writer_id, block_num, raw_bytes) VALUES (?, ?, ?, ?); "
+
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("BEGIN BATCH ")
+	args := make([]interface{}, 4*blockCount)
+
+	for i := 0; i < blockCount; i++ {
+		j := i * 4
+		args[j+0] = r.Int63()
+		args[j+1] = writerID
+		args[j+2] = blockNum + int64(i)
+		args[j+3] = randomBlock(r)
+		_, _ = buf.WriteString(insertBlockStmt)
+	}
+
+	_, _ = buf.WriteString("APPLY BATCH;")
+	return c.session.Query(buf.String(), args...).Exec()
 }
 
 func setupCassandra(parsedURL *url.URL) (database, error) {
-	if *batch != 1 {
-		return nil, fmt.Errorf("unsupported --batch size: %d", *batch)
-	}
-
 	cluster := gocql.NewCluster(parsedURL.Host)
 	cluster.Consistency = gocql.Quorum
 	s, err := cluster.CreateSession()
