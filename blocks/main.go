@@ -32,6 +32,8 @@ import (
 	"syscall"
 	"time"
 
+	mgo "gopkg.in/mgo.v2"
+
 	"github.com/codahale/hdrhistogram"
 	"github.com/satori/go.uuid"
 	// Import postgres driver.
@@ -188,8 +190,41 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	return &cockroach{db: db}, nil
 }
 
+type mongo struct {
+	blocks *mgo.Collection
+}
+
+func (m *mongo) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
+	type Block struct {
+		BlockID  int64
+		WriterID string
+		BlockNum int64
+		RawBytes []byte
+	}
+	docs := make([]interface{}, blockCount)
+	for i := 0; i < blockCount; i++ {
+		docs[i] = &Block{
+			BlockID:  r.Int63(),
+			WriterID: writerID,
+			BlockNum: blockNum + int64(i),
+			RawBytes: randomBlock(r),
+		}
+	}
+
+	return m.blocks.Insert(docs...)
+}
+
 func setupMongo(parsedURL *url.URL) (database, error) {
-	return nil, errors.New("unsupported")
+	session, err := mgo.Dial(parsedURL.String())
+	if err != nil {
+		panic(err)
+	}
+
+	session.SetMode(mgo.Monotonic, true)
+	// session.SetSafe(&mgo.Safe{FSync: true})
+
+	blocks := session.DB("datablocks").C("blocks")
+	return &mongo{blocks: blocks}, nil
 }
 
 func setupCassandra(parsedURL *url.URL) (database, error) {
