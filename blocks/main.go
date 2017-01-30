@@ -134,20 +134,18 @@ type cockroach struct {
 
 func (c *cockroach) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
 	var buf bytes.Buffer
-	args := make([]interface{}, blockCount)
 	_, _ = buf.WriteString(
 		`INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`)
 
 	for i := 0; i < blockCount; i++ {
 		blockID := r.Int63()
-		args[i] = randomBlock(r)
 		if i > 0 {
 			_, _ = buf.WriteString(", ")
 		}
-		fmt.Fprintf(&buf, ` (%d, '%s', %d, $%d)`, blockID, writerID, blockNum+int64(i), i+1)
+		fmt.Fprintf(&buf, ` (%d, '%s', %d, x'%x')`, blockID, writerID, blockNum+int64(i), randomBlock(r))
 	}
 
-	_, err := c.db.Exec(buf.String(), args...)
+	_, err := c.db.Exec(buf.String())
 	return err
 }
 
