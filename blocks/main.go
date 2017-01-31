@@ -115,6 +115,10 @@ func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup) {
 			errCh <- err
 		} else {
 			elapsed := time.Since(start)
+			// Avoid negative elapsed times, in case of clock jumps.
+			if elapsed < 0 {
+				elapsed = 0
+			}
 			b.latency.Lock()
 			if err := b.latency.Current.RecordValue(elapsed.Nanoseconds()); err != nil {
 				log.Fatal(err)
