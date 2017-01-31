@@ -149,9 +149,9 @@ func (c *cockroach) write(writerID string, blockNum int64, blockCount int, r *ra
 
 func setupCockroach(parsedURL *url.URL) (database, error) {
 	// Open connection to server and create a database.
-	db, err := sql.Open("postgres", parsedURL.String())
-	if err != nil {
-		return nil, err
+	db, dbErr := sql.Open("postgres", parsedURL.String())
+	if dbErr != nil {
+		return nil, dbErr
 	}
 	if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS datablocks"); err != nil {
 		return nil, err
@@ -183,12 +183,16 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString(`INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`)
+	if _, err := buf.WriteString(`INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`); err != nil {
+		return nil, err
+	}
 
 	for i := 0; i < *batch; i++ {
 		j := i * 4
 		if i > 0 {
-			buf.WriteString(", ")
+			if _, err := buf.WriteString(", "); err != nil {
+				return nil, err
+			}
 		}
 		fmt.Fprintf(&buf, ` ($%d, $%d, $%d, $%d)`, j+1, j+2, j+3, j+4)
 	}
@@ -247,7 +251,9 @@ func (c *cassandra) write(writerID string, blockNum int64, blockCount int, r *ra
 		"(block_id, writer_id, block_num, raw_bytes) VALUES (?, ?, ?, ?); "
 
 	var buf bytes.Buffer
-	buf.WriteString("BEGIN BATCH ")
+	if _, err := buf.WriteString("BEGIN BATCH "); err != nil {
+		return err
+	}
 	args := make([]interface{}, 4*blockCount)
 
 	for i := 0; i < blockCount; i++ {
@@ -256,10 +262,14 @@ func (c *cassandra) write(writerID string, blockNum int64, blockCount int, r *ra
 		args[j+1] = writerID
 		args[j+2] = blockNum + int64(i)
 		args[j+3] = randomBlock(r)
-		buf.WriteString(insertBlockStmt)
+		if _, err := buf.WriteString(insertBlockStmt); err != nil {
+			return err
+		}
 	}
 
-	buf.WriteString("APPLY BATCH;")
+	if _, err := buf.WriteString("APPLY BATCH;"); err != nil {
+		return err
+	}
 	return c.session.Query(buf.String(), args...).Exec()
 }
 
