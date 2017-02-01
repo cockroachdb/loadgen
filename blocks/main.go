@@ -32,6 +32,7 @@ import (
 	"time"
 
 	mgo "gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
 
 	"github.com/codahale/hdrhistogram"
 	"github.com/gocql/gocql"
@@ -43,6 +44,8 @@ import (
 const (
 	insertBlockStmt = `INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`
 )
+
+var readPercent = flag.Int("read-percent", 0, "Percent of operations that are reads")
 
 // concurrency = number of concurrent insertion processes.
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of concurrent writers inserting blocks")
@@ -61,13 +64,13 @@ var outputInterval = flag.Duration("output-interval", 1*time.Second, "Interval o
 var minBlockSizeBytes = flag.Int("min-block-bytes", 256, "Minimum amount of raw data written with each insertion")
 var maxBlockSizeBytes = flag.Int("max-block-bytes", 1024, "Maximum amount of raw data written with each insertion")
 
-var maxBlocks = flag.Uint64("max-blocks", 0, "Maximum number of blocks to write")
+var maxOps = flag.Uint64("max-ops", 0, "Maximum number of blocks to read/write")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
 var benchmarkName = flag.String("benchmark-name", "BenchmarkBlocks", "Test name to report "+
 	"for Go benchmark results.")
 
-// numBlocks keeps a global count of successfully written blocks.
-var numBlocks uint64
+// numOps keeps a global count of successful operations.
+var numOps uint64
 
 func randomBlock(r *rand.Rand) []byte {
 	blockSize := r.Intn(*maxBlockSizeBytes-*minBlockSizeBytes) + *minBlockSizeBytes
@@ -79,6 +82,7 @@ func randomBlock(r *rand.Rand) []byte {
 }
 
 type database interface {
+	read(blockID int64) error
 	write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error
 }
 
@@ -111,30 +115,47 @@ func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup) {
 	writerID := uuid.NewV4().String()
 	for blockNum := int64(0); ; blockNum += int64(*batch) {
 		start := time.Now()
-		if err := b.db.write(writerID, blockNum, *batch, b.rand); err != nil {
-			errCh <- err
+		var err error
+		read := b.rand.Intn(100) < *readPercent
+		if read {
+			err = b.db.read(b.rand.Int63())
 		} else {
-			elapsed := time.Since(start)
-			// Avoid negative elapsed times, in case of clock jumps.
-			if elapsed < 0 {
-				elapsed = 0
-			}
-			b.latency.Lock()
-			if err := b.latency.Current.RecordValue(elapsed.Nanoseconds()); err != nil {
-				log.Fatal(err)
-			}
-			b.latency.Unlock()
-			v := atomic.AddUint64(&numBlocks, uint64(*batch))
-			if *maxBlocks > 0 && v >= *maxBlocks {
-				return
-			}
+			err = b.db.write(writerID, blockNum, *batch, b.rand)
+		}
+		if err != nil {
+			errCh <- err
+			continue
+		}
+		elapsed := time.Since(start)
+		// Avoid negative elapsed times, in case of clock jumps.
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		b.latency.Lock()
+		if err := b.latency.Current.RecordValue(elapsed.Nanoseconds()); err != nil {
+			log.Fatal(err)
+		}
+		b.latency.Unlock()
+		v := atomic.AddUint64(&numOps, uint64(*batch))
+		if *maxOps > 0 && v >= *maxOps {
+			return
 		}
 	}
 }
 
 type cockroach struct {
-	db   *sql.DB
-	stmt *sql.Stmt
+	db        *sql.DB
+	readStmt  *sql.Stmt
+	writeStmt *sql.Stmt
+}
+
+func (c *cockroach) read(blockID int64) error {
+	var writerID string
+	var rawBytes []byte
+	if err := c.readStmt.QueryRow(0).Scan(&writerID, &rawBytes); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	return nil
 }
 
 func (c *cockroach) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
@@ -147,7 +168,7 @@ func (c *cockroach) write(writerID string, blockNum int64, blockCount int, r *ra
 		args[j+2] = blockNum + int64(i)
 		args[j+3] = randomBlock(r)
 	}
-	_, err := c.stmt.Exec(args...)
+	_, err := c.writeStmt.Exec(args...)
 	return err
 }
 
@@ -186,6 +207,11 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 		}
 	}
 
+	readStmt, err := db.Prepare(`SELECT writer_id, raw_bytes FROM blocks WHERE block_id >= $1 LIMIT 1`)
+	if err != nil {
+		return nil, err
+	}
+
 	var buf bytes.Buffer
 	buf.WriteString(`INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`)
 
@@ -197,28 +223,40 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 		fmt.Fprintf(&buf, ` ($%d, $%d, $%d, $%d)`, j+1, j+2, j+3, j+4)
 	}
 
-	stmt, err := db.Prepare(buf.String())
+	writeStmt, err := db.Prepare(buf.String())
 	if err != nil {
 		return nil, err
 	}
 
-	return &cockroach{db: db, stmt: stmt}, nil
+	return &cockroach{db: db, readStmt: readStmt, writeStmt: writeStmt}, nil
+}
+
+type mongoBlock struct {
+	BlockID  int64
+	WriterID string
+	BlockNum int64
+	RawBytes []byte
 }
 
 type mongo struct {
 	blocks *mgo.Collection
 }
 
-func (m *mongo) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
-	type Block struct {
-		BlockID  int64
-		WriterID string
-		BlockNum int64
-		RawBytes []byte
+func (m *mongo) read(blockID int64) error {
+	var b mongoBlock
+	if err := m.blocks.Find(bson.M{"blockid": bson.M{"$gte": blockID}}).One(&b); err != nil {
+		if err == mgo.ErrNotFound {
+			return nil
+		}
+		return err
 	}
+	return nil
+}
+
+func (m *mongo) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
 	docs := make([]interface{}, blockCount)
 	for i := 0; i < blockCount; i++ {
-		docs[i] = &Block{
+		docs[i] = &mongoBlock{
 			BlockID:  r.Int63(),
 			WriterID: writerID,
 			BlockNum: blockNum + int64(i),
@@ -239,11 +277,34 @@ func setupMongo(parsedURL *url.URL) (database, error) {
 	// session.SetSafe(&mgo.Safe{FSync: true})
 
 	blocks := session.DB("datablocks").C("blocks")
+	// blocks.DropCollection()
+	if err := blocks.EnsureIndex(mgo.Index{Key: []string{"blockid"}}); err != nil {
+		return nil, err
+	}
 	return &mongo{blocks: blocks}, nil
 }
 
 type cassandra struct {
 	session *gocql.Session
+}
+
+func (c *cassandra) read(blockID int64) error {
+	// TODO(peter): This doesn't work because:
+	//
+	//     Only EQ and IN relation are supported on the partition key
+	//     (unless you use the token() function).
+	var writerID string
+	var rawBytes []byte
+	if err := c.session.Query(
+		`SELECT writer_id, raw_bytes FROM datablocks.blocks WHERE block_id >= ? LIMIT 1`,
+		blockID).Consistency(gocql.One).Scan(&writerID, rawBytes); err != nil {
+		if err == gocql.ErrNotFound {
+			return nil
+		}
+		return err
+	}
+	fmt.Printf("%s\n", writerID)
+	return nil
 }
 
 func (c *cassandra) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
@@ -359,7 +420,7 @@ func main() {
 
 	lastNow := time.Now()
 	start := lastNow
-	var lastBlocks uint64
+	var lastOps uint64
 	writers := make([]*blocker, *concurrency)
 
 	errCh := make(chan error)
@@ -391,7 +452,7 @@ func main() {
 		// Output results that mimic Go's built-in benchmark format.
 		elapsed := time.Since(start)
 		fmt.Printf("%s\t%8d\t%12.1f ns/op\n",
-			*benchmarkName, numBlocks, float64(elapsed.Nanoseconds())/float64(numBlocks))
+			*benchmarkName, numOps, float64(elapsed.Nanoseconds())/float64(numOps))
 	}()
 
 	for i := 0; ; {
@@ -426,7 +487,7 @@ func main() {
 
 			now := time.Now()
 			elapsed := time.Since(lastNow)
-			blocks := atomic.LoadUint64(&numBlocks)
+			ops := atomic.LoadUint64(&numOps)
 			if i%20 == 0 {
 				fmt.Println("_elapsed___errors__ops/sec(inst)___ops/sec(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
 			}
@@ -434,22 +495,22 @@ func main() {
 			fmt.Printf("%8s %8d %14.1f %14.1f %8.1f %8.1f %8.1f %8.1f\n",
 				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
 				numErr,
-				float64(blocks-lastBlocks)/elapsed.Seconds(),
-				float64(blocks)/time.Since(start).Seconds(),
+				float64(ops-lastOps)/elapsed.Seconds(),
+				float64(ops)/time.Since(start).Seconds(),
 				time.Duration(p50).Seconds()*1000,
 				time.Duration(p95).Seconds()*1000,
 				time.Duration(p99).Seconds()*1000,
 				time.Duration(pMax).Seconds()*1000)
-			lastBlocks = blocks
+			lastOps = ops
 			lastNow = now
 
 		case <-done:
-			blocks := atomic.LoadUint64(&numBlocks)
+			ops := atomic.LoadUint64(&numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___errors_________blocks___ops/sec(cum)")
+			fmt.Println("\n_elapsed___errors____________ops___ops/sec(cum)")
 			fmt.Printf("%7.1fs %8d %14d %14.1f\n\n",
 				time.Since(start).Seconds(), numErr,
-				blocks, float64(blocks)/elapsed)
+				ops, float64(ops)/elapsed)
 			return
 		}
 	}
