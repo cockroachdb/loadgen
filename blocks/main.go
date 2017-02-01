@@ -153,9 +153,9 @@ func (c *cockroach) write(writerID string, blockNum int64, blockCount int, r *ra
 
 func setupCockroach(parsedURL *url.URL) (database, error) {
 	// Open connection to server and create a database.
-	db, err := sql.Open("postgres", parsedURL.String())
-	if err != nil {
-		return nil, err
+	db, dbErr := sql.Open("postgres", parsedURL.String())
+	if dbErr != nil {
+		return nil, dbErr
 	}
 	if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS datablocks"); err != nil {
 		return nil, err
