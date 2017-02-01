@@ -3,7 +3,9 @@
 
 set -eux
 
-for proj in blocks; do
-  time make STATIC=1 ${proj}
-  strip -S ${proj}/${proj}
+PROJECTS=( blocks ycsb )
+
+for i in "${PROJECTS[@]}"; do
+  time make STATIC=1 "${i}"
+  strip -S "${i}"/"${i}"
 done

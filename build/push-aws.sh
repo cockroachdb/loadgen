@@ -17,7 +17,7 @@ BUCKET_NAME="cockroach"
 LATEST_SUFFIX=".LATEST"
 REPO_NAME="loadgen"
 SHA="$(git rev-parse HEAD)"
-
+PROJECTS=( blocks ycsb )
 # push_one_binary takes the path to the binary inside the repo.
 # eg: push_one_binary sql/sql.test
 # The file will be pushed to: s3://BUCKET_NAME/REPO_NAME/sql.test.SHA
@@ -38,6 +38,6 @@ function push_one_binary {
   rm -f ${tmpfile}
 }
 
-for proj in blocks; do
-  push_one_binary ${proj}/${proj}
+for i in "${PROJECTS[@]}"; do
+  push_one_binary "${i}"/"${i}"
 done
