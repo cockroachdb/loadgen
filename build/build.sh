@@ -3,7 +3,7 @@
 
 set -eux
 
-for proj in blocks; do
+for proj in kv; do
   time make STATIC=1 ${proj}
   strip -S ${proj}/${proj}
 done
