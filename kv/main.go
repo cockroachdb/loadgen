@@ -36,13 +36,8 @@ import (
 
 	"github.com/codahale/hdrhistogram"
 	"github.com/gocql/gocql"
-	"github.com/satori/go.uuid"
 	// Import postgres driver.
 	_ "github.com/lib/pq"
-)
-
-const (
-	insertBlockStmt = `INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`
 )
 
 var readPercent = flag.Int("read-percent", 0, "Percent of operations that are reads")
@@ -98,7 +93,7 @@ func randomBlock(r *rand.Rand) []byte {
 
 type database interface {
 	read(blockID int64) error
-	write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error
+	write(count int, r *rand.Rand) error
 }
 
 type blocker struct {
@@ -125,15 +120,14 @@ func newBlocker(db database) *blocker {
 func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	writerID := uuid.NewV4().String()
-	for blockNum := int64(0); ; blockNum += int64(*batch) {
+	for {
 		start := time.Now()
 		var err error
 		read := b.rand.Intn(100) < *readPercent
 		if read {
 			err = b.db.read(b.rand.Int63())
 		} else {
-			err = b.db.write(writerID, blockNum, *batch, b.rand)
+			err = b.db.write(*batch, b.rand)
 		}
 		if err != nil {
 			errCh <- err
@@ -158,25 +152,25 @@ type cockroach struct {
 	writeStmt *sql.Stmt
 }
 
-func (c *cockroach) read(blockID int64) error {
-	var writerID string
-	var rawBytes []byte
-	if err := c.readStmt.QueryRow(blockID).Scan(&writerID, &rawBytes); err != nil && err != sql.ErrNoRows {
+func (c *cockroach) read(k int64) error {
+	var v []byte
+	if err := c.readStmt.QueryRow(k).Scan(&v); err != nil && err != sql.ErrNoRows {
 		return err
 	}
 	return nil
 }
 
-func (c *cockroach) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
-	const argCount = 4
-	args := make([]interface{}, argCount*blockCount)
-	for i := 0; i < blockCount; i++ {
+func (c *cockroach) write(count int, r *rand.Rand) error {
+	const argCount = 2
+	args := make([]interface{}, argCount*count)
+	for i := 0; i < count; i++ {
 		j := i * argCount
 		args[j+0] = r.Int63()
-		args[j+1] = writerID
-		args[j+2] = blockNum + int64(i)
-		args[j+3] = randomBlock(r)
+		args[j+1] = randomBlock(r)
 	}
+	// TODO(peter): The key generation is not guaranteed unique. Consider using
+	// UPSERT, though initial tests show that is half the speed. Or perhaps
+	// ignoring duplicate key violation errors.
 	_, err := c.writeStmt.Exec(args...)
 	return err
 }
@@ -187,7 +181,7 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	if dbErr != nil {
 		return nil, dbErr
 	}
-	if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS datablocks"); err != nil {
+	if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS test"); err != nil {
 		return nil, err
 	}
 
@@ -195,14 +189,10 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	db.SetMaxOpenConns(*concurrency + 1)
 	db.SetMaxIdleConns(*concurrency + 1)
 
-	// Create the initial table for storing blocks.
 	if _, err := db.Exec(`
-	CREATE TABLE IF NOT EXISTS blocks (
-	  block_id BIGINT NOT NULL,
-	  writer_id STRING NOT NULL,
-	  block_num BIGINT NOT NULL,
-	  raw_bytes BYTES NOT NULL,
-	  PRIMARY KEY (block_id, writer_id, block_num)
+	CREATE TABLE IF NOT EXISTS test.kv (
+	  k BIGINT NOT NULL PRIMARY KEY,
+	  v BYTES NOT NULL
 	)`); err != nil {
 		return nil, err
 	}
@@ -210,26 +200,26 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	if *splits > 0 {
 		r := rand.New(rand.NewSource(int64(time.Now().UnixNano())))
 		for i := 0; i < *splits; i++ {
-			if _, err := db.Exec(`ALTER TABLE blocks SPLIT AT ($1, '', 0)`, r.Int63()); err != nil {
+			if _, err := db.Exec(`ALTER TABLE test.kv SPLIT AT ($1)`, r.Int63()); err != nil {
 				return nil, err
 			}
 		}
 	}
 
-	readStmt, err := db.Prepare(`SELECT writer_id, raw_bytes FROM blocks WHERE block_id >= $1 LIMIT 1`)
+	readStmt, err := db.Prepare(`SELECT v FROM test.kv WHERE k >= $1 LIMIT 1`)
 	if err != nil {
 		return nil, err
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString(`INSERT INTO blocks (block_id, writer_id, block_num, raw_bytes) VALUES`)
+	buf.WriteString(`INSERT INTO test.kv (k, v) VALUES`)
 
 	for i := 0; i < *batch; i++ {
-		j := i * 4
+		j := i * 2
 		if i > 0 {
 			buf.WriteString(", ")
 		}
-		fmt.Fprintf(&buf, ` ($%d, $%d, $%d, $%d)`, j+1, j+2, j+3, j+4)
+		fmt.Fprintf(&buf, ` ($%d, $%d)`, j+1, j+2)
 	}
 
 	writeStmt, err := db.Prepare(buf.String())
@@ -241,19 +231,17 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 }
 
 type mongoBlock struct {
-	BlockID  int64 `bson:"_id"`
-	WriterID string
-	BlockNum int64
-	RawBytes []byte
+	Key   int64 `bson:"_id"`
+	Value []byte
 }
 
 type mongo struct {
-	blocks *mgo.Collection
+	kv *mgo.Collection
 }
 
 func (m *mongo) read(blockID int64) error {
 	var b mongoBlock
-	if err := m.blocks.Find(bson.M{"_id": bson.M{"$gte": blockID}}).One(&b); err != nil {
+	if err := m.kv.Find(bson.M{"_id": bson.M{"$gte": blockID}}).One(&b); err != nil {
 		if err == mgo.ErrNotFound {
 			return nil
 		}
@@ -262,18 +250,16 @@ func (m *mongo) read(blockID int64) error {
 	return nil
 }
 
-func (m *mongo) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
-	docs := make([]interface{}, blockCount)
-	for i := 0; i < blockCount; i++ {
+func (m *mongo) write(count int, r *rand.Rand) error {
+	docs := make([]interface{}, count)
+	for i := 0; i < count; i++ {
 		docs[i] = &mongoBlock{
-			BlockID:  r.Int63(),
-			WriterID: writerID,
-			BlockNum: blockNum + int64(i),
-			RawBytes: randomBlock(r),
+			Key:   r.Int63(),
+			Value: randomBlock(r),
 		}
 	}
 
-	return m.blocks.Insert(docs...)
+	return m.kv.Insert(docs...)
 }
 
 func setupMongo(parsedURL *url.URL) (database, error) {
@@ -285,14 +271,11 @@ func setupMongo(parsedURL *url.URL) (database, error) {
 	session.SetMode(mgo.Monotonic, true)
 	// session.SetSafe(&mgo.Safe{FSync: true})
 
-	blocks := session.DB("datablocks").C("blocks")
-	if err := blocks.DropCollection(); err != nil {
-		return nil, err
-	}
-	if err := blocks.EnsureIndex(mgo.Index{Key: []string{"_id"}}); err != nil {
-		return nil, err
-	}
-	return &mongo{blocks: blocks}, nil
+	kv := session.DB("test").C("kv")
+	// if err := kv.DropCollection(); err != nil && err != mgo.ErrNotFound {
+	// 	return nil, err
+	// }
+	return &mongo{kv: kv}, nil
 }
 
 type cassandra struct {
@@ -304,34 +287,30 @@ func (c *cassandra) read(blockID int64) error {
 	//
 	//     Only EQ and IN relation are supported on the partition key
 	//     (unless you use the token() function).
-	var writerID string
-	var rawBytes []byte
+	var v []byte
 	if err := c.session.Query(
-		`SELECT writer_id, raw_bytes FROM datablocks.blocks WHERE block_id >= ? LIMIT 1`,
-		blockID).Consistency(gocql.One).Scan(&writerID, rawBytes); err != nil {
+		`SELECT v FROM test.kv WHERE k >= ? LIMIT 1`,
+		blockID).Consistency(gocql.One).Scan(&v); err != nil {
 		if err == gocql.ErrNotFound {
 			return nil
 		}
 		return err
 	}
-	fmt.Printf("%s\n", writerID)
 	return nil
 }
 
-func (c *cassandra) write(writerID string, blockNum int64, blockCount int, r *rand.Rand) error {
-	const insertBlockStmt = "INSERT INTO datablocks.blocks " +
-		"(block_id, writer_id, block_num, raw_bytes) VALUES (?, ?, ?, ?); "
+func (c *cassandra) write(count int, r *rand.Rand) error {
+	const insertBlockStmt = "INSERT INTO test.kv (k, v) VALUES (?, ?); "
 
 	var buf bytes.Buffer
 	buf.WriteString("BEGIN BATCH ")
-	args := make([]interface{}, 4*blockCount)
+	const argCount = 2
+	args := make([]interface{}, argCount*count)
 
-	for i := 0; i < blockCount; i++ {
-		j := i * 4
+	for i := 0; i < count; i++ {
+		j := i * argCount
 		args[j+0] = r.Int63()
-		args[j+1] = writerID
-		args[j+2] = blockNum + int64(i)
-		args[j+3] = randomBlock(r)
+		args[j+1] = randomBlock(r)
 		buf.WriteString(insertBlockStmt)
 	}
 
@@ -348,17 +327,15 @@ func setupCassandra(parsedURL *url.URL) (database, error) {
 	}
 
 	const createKeyspace = `
-CREATE KEYSPACE IF NOT EXISTS datablocks WITH REPLICATION = {
+CREATE KEYSPACE IF NOT EXISTS test WITH REPLICATION = {
   'class' : 'SimpleStrategy',
   'replication_factor' : 1
 };`
 	const createTable = `
-CREATE TABLE IF NOT EXISTS datablocks.blocks(
-  block_id BIGINT,
-  writer_id TEXT,
-  block_num BIGINT,
-  raw_bytes BLOB,
-  PRIMARY KEY(block_id, writer_id, block_num)
+CREATE TABLE IF NOT EXISTS test.kv(
+  k BIGINT,
+  v BLOB,
+  PRIMARY KEY(k)
 );`
 
 	if err := s.Query(createKeyspace).RetryPolicy(nil).Exec(); err != nil {
@@ -378,7 +355,7 @@ func setupDatabase(dbURL string) (database, error) {
 	if err != nil {
 		return nil, err
 	}
-	parsedURL.Path = "datablocks"
+	parsedURL.Path = "test"
 
 	switch parsedURL.Scheme {
 	case "postgres", "postgresql":
