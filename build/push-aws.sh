@@ -38,6 +38,6 @@ function push_one_binary {
   rm -f ${tmpfile}
 }
 
-for proj in blocks; do
+for proj in kv; do
   push_one_binary ${proj}/${proj}
 done
