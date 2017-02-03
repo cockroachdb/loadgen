@@ -68,6 +68,10 @@ var benchmarkName = flag.String("benchmark-name", "BenchmarkBlocks", "Test name 
 var mongoWMode = flag.String("mongo-wmode", "", "WMode for mongo session (eg: majority)")
 var mongoJ = flag.Bool("mongo-j", false, "Sync journal before op return")
 
+// Cassandra flags.
+var cassandraConsistency = flag.String("cassandra-consistency", "QUORUM", "Op consistency: ANY ONE TWO THREE QUORUM ALL LOCAL_QUORUM EACH_QUORUM LOCAL_ONE")
+var cassandraReplication = flag.Int("cassandra-replication", 1, "Replication factor for cassandra")
+
 // numOps keeps a global count of successful operations.
 var numOps uint64
 
@@ -324,17 +328,18 @@ func (c *cassandra) write(count int, r *rand.Rand) error {
 
 func setupCassandra(parsedURL *url.URL) (database, error) {
 	cluster := gocql.NewCluster(parsedURL.Host)
-	cluster.Consistency = gocql.Quorum
+	cluster.Consistency = gocql.ParseConsistency(*cassandraConsistency)
 	s, err := cluster.CreateSession()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	const createKeyspace = `
+	createKeyspace := fmt.Sprintf(`
 CREATE KEYSPACE IF NOT EXISTS test WITH REPLICATION = {
   'class' : 'SimpleStrategy',
-  'replication_factor' : 1
-};`
+  'replication_factor' : %d
+};`, *cassandraReplication)
+
 	const createTable = `
 CREATE TABLE IF NOT EXISTS test.kv(
   k BIGINT,
