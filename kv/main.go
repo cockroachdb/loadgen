@@ -64,6 +64,10 @@ var duration = flag.Duration("duration", 0, "The duration to run. If 0, run fore
 var benchmarkName = flag.String("benchmark-name", "BenchmarkBlocks", "Test name to report "+
 	"for Go benchmark results.")
 
+// Mongo flags. See https://godoc.org/gopkg.in/mgo.v2#Session.SetSafe for details.
+var mongoWMode = flag.String("mongo-wmode", "", "WMode for mongo session (eg: majority)")
+var mongoJ = flag.Bool("mongo-j", false, "Sync journal before op return")
+
 // numOps keeps a global count of successful operations.
 var numOps uint64
 
@@ -269,7 +273,7 @@ func setupMongo(parsedURL *url.URL) (database, error) {
 	}
 
 	session.SetMode(mgo.Monotonic, true)
-	// session.SetSafe(&mgo.Safe{FSync: true})
+	session.SetSafe(&mgo.Safe{WMode: *mongoWMode, J: *mongoJ})
 
 	kv := session.DB("test").C("kv")
 	// if err := kv.DropCollection(); err != nil && err != mgo.ErrNotFound {
