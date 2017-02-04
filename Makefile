@@ -37,11 +37,15 @@ deps:
 	$(GO) get -d -t ./...
 
 .PHONY: build
-build: deps kv
+build: deps kv ycsb
 
 .PHONY: kv
 kv:
 	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o kv/kv ./kv
+
+.PHONY: ycsb
+ycsb:
+	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o ycsb/ycsb ./ycsb
 
 .PHONY: check
 check:
