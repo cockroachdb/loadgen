@@ -290,7 +290,7 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString(`INSERT INTO test.kv (k, v) VALUES`)
+	buf.WriteString(`UPSERT INTO test.kv (k, v) VALUES`)
 
 	for i := 0; i < *batch; i++ {
 		j := i * 2
