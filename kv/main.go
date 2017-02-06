@@ -17,9 +17,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"database/sql"
+	"encoding/binary"
 	"flag"
 	"fmt"
+	"hash"
 	"log"
 	"math/rand"
 	"net/url"
@@ -56,11 +59,14 @@ var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error"
 var outputInterval = flag.Duration("output-interval", 1*time.Second, "Interval of output")
 
 // Minimum and maximum size of inserted blocks.
-var minBlockSizeBytes = flag.Int("min-block-bytes", 256, "Minimum amount of raw data written with each insertion")
-var maxBlockSizeBytes = flag.Int("max-block-bytes", 1024, "Maximum amount of raw data written with each insertion")
+var minBlockSizeBytes = flag.Int("min-block-bytes", 1, "Minimum amount of raw data written with each insertion")
+var maxBlockSizeBytes = flag.Int("max-block-bytes", 2, "Maximum amount of raw data written with each insertion")
 
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of blocks to read/write")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
+var writeSeq = flag.Int64("write-seq", 0, "Initial write sequence value.")
+var seqSeed = flag.Int64("seed", time.Now().UnixNano(), "Key hash seed.")
+var drop = flag.Bool("drop", false, "Clear the existing data before starting.")
 var benchmarkName = flag.String("benchmark-name", "BenchmarkBlocks", "Test name to report "+
 	"for Go benchmark results.")
 
@@ -90,33 +96,87 @@ func clampLatency(d, min, max time.Duration) time.Duration {
 	return d
 }
 
-func randomBlock(r *rand.Rand) []byte {
-	blockSize := r.Intn(*maxBlockSizeBytes-*minBlockSizeBytes) + *minBlockSizeBytes
+type sequence struct {
+	val  int64
+	seed int64
+}
+
+func (s *sequence) write() int64 {
+	return atomic.AddInt64(&s.val, 1) - 1
+}
+
+// read returns the max key index that has been written. Note that the returned
+// index might not actually have been written yet, so a read operation cannot
+// require that the key is present.
+func (s *sequence) read() int64 {
+	return atomic.LoadInt64(&s.val)
+}
+
+// generator generates read and write keys. Read keys are guaranteed to
+// exist. A generator is NOT goroutine safe.
+type generator struct {
+	seq    *sequence
+	rand   *rand.Rand
+	hasher hash.Hash
+	buf    [sha1.Size]byte
+}
+
+func newGenerator(seq *sequence) *generator {
+	return &generator{
+		seq:    seq,
+		rand:   rand.New(rand.NewSource(int64(time.Now().UnixNano()))),
+		hasher: sha1.New(),
+	}
+}
+
+func (g *generator) hash(v int64) int64 {
+	binary.BigEndian.PutUint64(g.buf[:8], uint64(v))
+	binary.BigEndian.PutUint64(g.buf[8:16], uint64(g.seq.seed))
+	g.hasher.Reset()
+	_, _ = g.hasher.Write(g.buf[:16])
+	g.hasher.Sum(g.buf[:0])
+	return int64(binary.BigEndian.Uint64(g.buf[:8]))
+}
+
+func (g *generator) writeKey() int64 {
+	return g.hash(g.seq.write())
+}
+
+func (g *generator) readKey() int64 {
+	v := g.seq.read()
+	if v == 0 {
+		return 0
+	}
+	return g.hash(g.rand.Int63n(v))
+}
+
+func (g *generator) randomBlock() []byte {
+	blockSize := g.rand.Intn(*maxBlockSizeBytes-*minBlockSizeBytes) + *minBlockSizeBytes
 	blockData := make([]byte, blockSize)
 	for i := range blockData {
-		blockData[i] = byte(r.Int() & 0xff)
+		blockData[i] = byte(g.rand.Int() & 0xff)
 	}
 	return blockData
 }
 
 type database interface {
-	read(blockID int64) error
-	write(count int, r *rand.Rand) error
+	read(key int64) error
+	write(count int, g *generator) error
 }
 
 type blocker struct {
 	db      database
-	rand    *rand.Rand
+	gen     *generator
 	latency struct {
 		sync.Mutex
 		*hdrhistogram.WindowedHistogram
 	}
 }
 
-func newBlocker(db database) *blocker {
+func newBlocker(db database, seq *sequence) *blocker {
 	b := &blocker{
-		db:   db,
-		rand: rand.New(rand.NewSource(int64(time.Now().UnixNano()))),
+		db:  db,
+		gen: newGenerator(seq),
 	}
 	b.latency.WindowedHistogram = hdrhistogram.NewWindowed(1,
 		minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
@@ -131,11 +191,10 @@ func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup) {
 	for {
 		start := time.Now()
 		var err error
-		read := b.rand.Intn(100) < *readPercent
-		if read {
-			err = b.db.read(b.rand.Int63())
+		if b.gen.rand.Intn(100) < *readPercent {
+			err = b.db.read(b.gen.readKey())
 		} else {
-			err = b.db.write(*batch, b.rand)
+			err = b.db.write(*batch, b.gen)
 		}
 		if err != nil {
 			errCh <- err
@@ -162,19 +221,19 @@ type cockroach struct {
 
 func (c *cockroach) read(k int64) error {
 	var v []byte
-	if err := c.readStmt.QueryRow(k).Scan(&v); err != nil && err != sql.ErrNoRows {
+	if err := c.readStmt.QueryRow(k).Scan(&k, &v); err != nil && err != sql.ErrNoRows {
 		return err
 	}
 	return nil
 }
 
-func (c *cockroach) write(count int, r *rand.Rand) error {
+func (c *cockroach) write(count int, g *generator) error {
 	const argCount = 2
 	args := make([]interface{}, argCount*count)
 	for i := 0; i < count; i++ {
 		j := i * argCount
-		args[j+0] = r.Int63()
-		args[j+1] = randomBlock(r)
+		args[j+0] = g.writeKey()
+		args[j+1] = g.randomBlock()
 	}
 	// TODO(peter): The key generation is not guaranteed unique. Consider using
 	// UPSERT, though initial tests show that is half the speed. Or perhaps
@@ -197,6 +256,12 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	db.SetMaxOpenConns(*concurrency + 1)
 	db.SetMaxIdleConns(*concurrency + 1)
 
+	if *drop {
+		if _, err := db.Exec(`DROP TABLE IF EXISTS test.kv`); err != nil {
+			return nil, err
+		}
+	}
+
 	if _, err := db.Exec(`
 	CREATE TABLE IF NOT EXISTS test.kv (
 	  k BIGINT NOT NULL PRIMARY KEY,
@@ -214,7 +279,7 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 		}
 	}
 
-	readStmt, err := db.Prepare(`SELECT v FROM test.kv WHERE k >= $1 LIMIT 1`)
+	readStmt, err := db.Prepare(`SELECT k, v FROM test.kv WHERE k = $1 LIMIT 1`)
 	if err != nil {
 		return nil, err
 	}
@@ -247,9 +312,13 @@ type mongo struct {
 	kv *mgo.Collection
 }
 
-func (m *mongo) read(blockID int64) error {
+func (m *mongo) read(key int64) error {
 	var b mongoBlock
-	if err := m.kv.Find(bson.M{"_id": bson.M{"$gte": blockID}}).One(&b); err != nil {
+	// These queries are functionally the same, but the one using the $eq
+	// operator is ~30% slower!
+	//
+	// if err := m.kv.Find(bson.M{"_id": bson.M{"$eq": key}}).One(&b); err != nil {
+	if err := m.kv.Find(bson.M{"_id": key}).One(&b); err != nil {
 		if err == mgo.ErrNotFound {
 			return nil
 		}
@@ -258,12 +327,12 @@ func (m *mongo) read(blockID int64) error {
 	return nil
 }
 
-func (m *mongo) write(count int, r *rand.Rand) error {
+func (m *mongo) write(count int, g *generator) error {
 	docs := make([]interface{}, count)
 	for i := 0; i < count; i++ {
 		docs[i] = &mongoBlock{
-			Key:   r.Int63(),
-			Value: randomBlock(r),
+			Key:   g.writeKey(),
+			Value: g.randomBlock(),
 		}
 	}
 
@@ -280,9 +349,11 @@ func setupMongo(parsedURL *url.URL) (database, error) {
 	session.SetSafe(&mgo.Safe{WMode: *mongoWMode, J: *mongoJ})
 
 	kv := session.DB("test").C("kv")
-	// if err := kv.DropCollection(); err != nil && err != mgo.ErrNotFound {
-	// 	return nil, err
-	// }
+	if *drop {
+		// Intentionally ignore the error as we can't tell if the collection
+		// doesn't exist.
+		_ = kv.DropCollection()
+	}
 	return &mongo{kv: kv}, nil
 }
 
@@ -290,15 +361,11 @@ type cassandra struct {
 	session *gocql.Session
 }
 
-func (c *cassandra) read(blockID int64) error {
-	// TODO(peter): This doesn't work because:
-	//
-	//     Only EQ and IN relation are supported on the partition key
-	//     (unless you use the token() function).
+func (c *cassandra) read(key int64) error {
 	var v []byte
 	if err := c.session.Query(
-		`SELECT v FROM test.kv WHERE k >= ? LIMIT 1`,
-		blockID).Consistency(gocql.One).Scan(&v); err != nil {
+		`SELECT v FROM test.kv WHERE k = ? LIMIT 1`,
+		key).Consistency(gocql.One).Scan(&v); err != nil {
 		if err == gocql.ErrNotFound {
 			return nil
 		}
@@ -307,7 +374,7 @@ func (c *cassandra) read(blockID int64) error {
 	return nil
 }
 
-func (c *cassandra) write(count int, r *rand.Rand) error {
+func (c *cassandra) write(count int, g *generator) error {
 	const insertBlockStmt = "INSERT INTO test.kv (k, v) VALUES (?, ?); "
 
 	var buf bytes.Buffer
@@ -317,8 +384,8 @@ func (c *cassandra) write(count int, r *rand.Rand) error {
 
 	for i := 0; i < count; i++ {
 		j := i * argCount
-		args[j+0] = r.Int63()
-		args[j+1] = randomBlock(r)
+		args[j+0] = g.writeKey()
+		args[j+1] = g.randomBlock()
 		buf.WriteString(insertBlockStmt)
 	}
 
@@ -332,6 +399,10 @@ func setupCassandra(parsedURL *url.URL) (database, error) {
 	s, err := cluster.CreateSession()
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if *drop {
+		_ = s.Query(`DROP KEYSPACE test`).RetryPolicy(nil).Exec()
 	}
 
 	createKeyspace := fmt.Sprintf(`
@@ -420,11 +491,12 @@ func main() {
 	var lastOps uint64
 	writers := make([]*blocker, *concurrency)
 
+	seq := &sequence{val: *writeSeq, seed: *seqSeed}
 	errCh := make(chan error)
 	var wg sync.WaitGroup
 	for i := range writers {
 		wg.Add(1)
-		writers[i] = newBlocker(db)
+		writers[i] = newBlocker(db, seq)
 		go writers[i].run(errCh, &wg)
 	}
 
@@ -504,10 +576,11 @@ func main() {
 		case <-done:
 			ops := atomic.LoadUint64(&numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___errors____________ops___ops/sec(cum)")
-			fmt.Printf("%7.1fs %8d %14d %14.1f\n\n",
+			fmt.Println("\n_elapsed___errors____________ops___ops/sec(cum)_____seq(begin/end)")
+			fmt.Printf("%7.1fs %8d %14d %14.1f %18s\n\n",
 				time.Since(start).Seconds(), numErr,
-				ops, float64(ops)/elapsed)
+				ops, float64(ops)/elapsed,
+				fmt.Sprintf("%d / %d", *writeSeq, seq.read()))
 			return
 		}
 	}
