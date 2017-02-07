@@ -52,9 +52,10 @@ type ZipfGenerator struct {
 
 // ZipfGeneratorMu holds variables which must be globally synced.
 type ZipfGeneratorMu struct {
-	mu   sync.Mutex
-	iMax uint64
-	eta  float64
+	mu       sync.Mutex
+	iMax     uint64
+	iMaxHead uint64
+	eta      float64
 }
 
 // NewZipfGenerator constructs a new ZipfGenerator with the given parameters.
@@ -145,22 +146,31 @@ func (z *ZipfGenerator) Uint64() uint64 {
 	return result
 }
 
-// IncrementIMax increments, iMax, recomputing the internal values that depend
-// on it, and returns the value of iMax before it was incremented. It throws an
-// error if it could not increment iMax.
-func (z *ZipfGenerator) IncrementIMax() (uint64, error) {
+// IncrementIMax increments, iMax, and recompute the internal values that depend
+// on it. It throws an error if the recomputation failed.
+func (z *ZipfGenerator) IncrementIMax() error {
 	z.zipfGenMu.mu.Lock()
-	oldIMax := z.zipfGenMu.iMax
 	zetaN, err := computeZetaIncrementally(z.zipfGenMu.iMax, z.zipfGenMu.iMax+1, z.theta, z.zetaN)
 	if err != nil {
 		z.zipfGenMu.mu.Unlock()
-		return 0, errors.Errorf("Could not incrementally compute zeta: %s", err)
+		return errors.Errorf("Could not incrementally compute zeta: %s", err)
 	}
 	eta := (1 - math.Pow(2.0/float64(z.zipfGenMu.iMax+1-z.iMin), 1.0-z.theta)) / (1.0 - z.zeta2/zetaN)
 	z.zipfGenMu.eta = eta
 	z.zetaN = zetaN
 	z.zipfGenMu.iMax++
 	z.zipfGenMu.mu.Unlock()
+	return nil
+}
 
-	return oldIMax, nil
+// IMaxHead returns the current value of IMaxHead, and increments it after.
+func (z *ZipfGenerator) IMaxHead() uint64 {
+	z.zipfGenMu.mu.Lock()
+	if z.zipfGenMu.iMaxHead < z.zipfGenMu.iMax {
+		z.zipfGenMu.iMaxHead = z.zipfGenMu.iMax
+	}
+	iMaxHead := z.zipfGenMu.iMaxHead
+	z.zipfGenMu.iMaxHead++
+	z.zipfGenMu.mu.Unlock()
+	return iMaxHead
 }

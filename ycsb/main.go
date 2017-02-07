@@ -185,18 +185,15 @@ func (yw *ycsbWorker) nextReadKey() (uint64, error) {
 	return hashedKey, nil
 }
 
-func (yw *ycsbWorker) nextWriteKey() (uint64, error) {
-	key, err := yw.zipfR.IncrementIMax()
-	if err != nil {
-		return key, err
-	}
+func (yw *ycsbWorker) nextWriteKey() uint64 {
+	key := yw.zipfR.IMaxHead()
 	buf := make([]byte, 8)
 	binary.PutUvarint(buf, key)
 	hashedKey := yw.hashKey(buf, *maxWrites)
 	if *verbose {
 		fmt.Printf("writer drew: fnv(%d) -> %d\n", key, hashedKey)
 	}
-	return hashedKey, nil
+	return hashedKey
 }
 
 // runLoader inserts n rows in parallel across numWorkers, with
@@ -216,7 +213,7 @@ func (yw *ycsbWorker) runLoader(n int, numWorkers int, thisWorkerNum int, wg *sy
 		buf := make([]byte, 8)
 		binary.PutUvarint(buf, key)
 		hashedKey := yw.hashKey(buf, *maxWrites)
-		if err := yw.insertRow(hashedKey); err != nil {
+		if err := yw.insertRow(hashedKey, false); err != nil {
 			if *verbose {
 				fmt.Printf("error loading row %d: %s\n", i, err)
 			}
@@ -247,12 +244,8 @@ func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
 			if atomic.LoadUint64(&globalStats[writes]) > *maxWrites {
 				break
 			}
-			key, err := yw.nextWriteKey()
-			if err != nil {
-				errCh <- err
-				atomic.AddUint64(&yw.stats[writeErrors], 1)
-			}
-			if err = yw.insertRow(key); err != nil {
+			key := yw.nextWriteKey()
+			if err := yw.insertRow(key, true); err != nil {
 				errCh <- err
 				atomic.AddUint64(&yw.stats[writeErrors], 1)
 			}
@@ -283,7 +276,7 @@ func (yw *ycsbWorker) randString(length int) string {
 	return fmt.Sprintf("'%s'", string(str))
 }
 
-func (yw *ycsbWorker) insertRow(key uint64) error {
+func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
 	fields := make([]string, numTableFields+1)
 	fields[0] = strconv.FormatUint(key, 10)
 	for i := 1; i < len(fields); i++ {
@@ -300,6 +293,11 @@ func (yw *ycsbWorker) insertRow(key uint64) error {
 		return err
 	}
 
+	if increment {
+		if err = yw.zipfR.IncrementIMax(); err != nil {
+			return err
+		}
+	}
 	atomic.AddUint64(&yw.stats[writes], 1)
 	return nil
 }
