@@ -50,28 +50,16 @@ const (
 	fieldLength    = 100 // In characters
 )
 
-// Constants for the Zipfian RNG
-// The following constants use the definitions from [1]:
-//"Quickly Generating Billion-Record Synthetic Databases"
-// by Gray et al, SIGMOD 1994. The values are set to match the values in
-// [2]: https://github.com/brianfrankcooper/YCSB/blob/0a330744c5b6f3b1a49e8988ccf1f6ac748340f5/core/src/main/java/com/yahoo/ycsb/generator/ZipfianGenerator.java
-// The following comment translates the names between the two citations.
 const (
-	// zipfS from [2] = -theta from [1].
-	// zipfS = 0.99 TODO(arjun): Golang doesn't support s <= 1, so set to 1.01
-	// for now. Slight skew in distribution results. In the long run we need to
-	// write our own incrementing Zipfian generator.
-	zipfS = 1.01
-	// zipfV = 1, ensures values are 1 indexed.
-	zipfV = 1
-	// zipfIMax from [2] = N from [1], is incremented with each insert.
+	zipfS    = 0.99
+	zipfIMin = 1
 )
 
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(),
 	"Number of concurrent workers sending read/write requests.")
 var workload = flag.String("workload", "B", "workload type. Choose from A-E.")
-var tolerateErrors = flag.Bool("tolerate-errors", true,
-	"Keep running on error. (default true)")
+var tolerateErrors = flag.Bool("tolerate-errors", false,
+	"Keep running on error. (default false)")
 var duration = flag.Duration("duration", 0,
 	"The duration to run. If 0, run forever.")
 var verbose = flag.Bool("v", false, "Print *verbose debug output")
@@ -79,11 +67,11 @@ var drop = flag.Bool("drop", true,
 	"Drop the existing table and recreate it to start from scratch")
 var rateLimit = flag.Uint64("rate-limit", 0,
 	"Maximum number of operations per second per worker. Set to zero for no rate limit")
-var initialLoad = flag.Uint64("initial-load", 1000,
+var initialLoad = flag.Uint64("initial-load", 10000,
 	"Initial number of rows to sequentially insert before beginning Zipfian workload generation")
 
-// 4 hours at 5% writes and 30k ops/s
-var maxWrites = flag.Uint64("max-writes", 4*3600*1500,
+// 7 days at 5% writes and 30k ops/s
+var maxWrites = flag.Uint64("max-writes", 7*24*3600*1500,
 	"Maximum number of writes to perform before halting. This is required for accurately generating keys that are uniformly distributed across the keyspace.")
 
 // ycsbWorker independently issues reads, writes, and scans against the database.
@@ -91,7 +79,7 @@ type ycsbWorker struct {
 	workerID int
 	db       *sql.DB
 	// An RNG used to generate random keys
-	zipfR *rand.Zipf
+	zipfR *ZipfGenerator
 	// An RNG used to generate random strings for the values
 	r             *rand.Rand
 	readFreq      float32
@@ -125,7 +113,7 @@ const (
 	scanOp
 )
 
-func newYcsbWorker(db *sql.DB, id int, workloadFlag string) *ycsbWorker {
+func newYcsbWorker(db *sql.DB, zipfR *ZipfGenerator, id int, workloadFlag string) *ycsbWorker {
 	if *verbose {
 		fmt.Printf("Creating YCSB Worker '%d' running Workload %s\n", id, workloadFlag)
 	}
@@ -158,7 +146,6 @@ func newYcsbWorker(db *sql.DB, id int, workloadFlag string) *ycsbWorker {
 		panic("Workload E (scans) not implemented yet")
 	}
 	r := rand.New(source)
-	zipfR := rand.NewZipf(r, zipfS, zipfV, *maxWrites)
 	return &ycsbWorker{
 		db:            db,
 		workerID:      id,
@@ -186,28 +173,25 @@ func (yw *ycsbWorker) hashKey(key []byte, maxValue uint64) uint64 {
 // Keys are chosen by first drawing from a Zipf distribution and hashing the
 // drawn value, so that not all hot keys are close together.
 // See YCSB paper section 5.3 for a complete description of how keys are chosen.
-func (yw *ycsbWorker) nextReadKey() uint64 {
-	var draw, hashedKey uint64
-	draw = yw.zipfR.Uint64()
+func (yw *ycsbWorker) nextReadKey() (uint64, error) {
+	var hashedKey uint64
+	draw := yw.zipfR.Uint64()
 	buf := make([]byte, 8)
 	binary.PutUvarint(buf, draw)
 	hashedKey = yw.hashKey(buf, *maxWrites)
 	if *verbose {
 		fmt.Printf("reader drew: %d -> %d\n", draw, hashedKey)
 	}
-	return hashedKey
+	return hashedKey, nil
 }
 
-// TODO(arjun): once we have the incrementing Zipf RNG implemented, we can
-// adjust the key selection to the correct distribution. Currently the keys are
-// incorrectly skewed, and don't meet the YCSB specification.
 func (yw *ycsbWorker) nextWriteKey() uint64 {
-	draw := yw.zipfR.Uint64()
+	key := yw.zipfR.IMaxHead()
 	buf := make([]byte, 8)
-	binary.PutUvarint(buf, draw)
+	binary.PutUvarint(buf, key)
 	hashedKey := yw.hashKey(buf, *maxWrites)
 	if *verbose {
-		fmt.Printf("writer drew: %d -> %d\n", draw, hashedKey)
+		fmt.Printf("writer drew: fnv(%d) -> %d\n", key, hashedKey)
 	}
 	return hashedKey
 }
@@ -229,7 +213,7 @@ func (yw *ycsbWorker) runLoader(n int, numWorkers int, thisWorkerNum int, wg *sy
 		buf := make([]byte, 8)
 		binary.PutUvarint(buf, key)
 		hashedKey := yw.hashKey(buf, *maxWrites)
-		if err := yw.insertRow(hashedKey); err != nil {
+		if err := yw.insertRow(hashedKey, false); err != nil {
 			if *verbose {
 				fmt.Printf("error loading row %d: %s\n", i, err)
 			}
@@ -261,7 +245,7 @@ func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
 				break
 			}
 			key := yw.nextWriteKey()
-			if err := yw.insertRow(key); err != nil {
+			if err := yw.insertRow(key, true); err != nil {
 				errCh <- err
 				atomic.AddUint64(&yw.stats[writeErrors], 1)
 			}
@@ -292,7 +276,7 @@ func (yw *ycsbWorker) randString(length int) string {
 	return fmt.Sprintf("'%s'", string(str))
 }
 
-func (yw *ycsbWorker) insertRow(key uint64) error {
+func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
 	fields := make([]string, numTableFields+1)
 	fields[0] = strconv.FormatUint(key, 10)
 	for i := 1; i < len(fields); i++ {
@@ -309,17 +293,26 @@ func (yw *ycsbWorker) insertRow(key uint64) error {
 		return err
 	}
 
+	if increment {
+		if err = yw.zipfR.IncrementIMax(); err != nil {
+			return err
+		}
+	}
 	atomic.AddUint64(&yw.stats[writes], 1)
 	return nil
 }
 
 func (yw *ycsbWorker) readRow() error {
-	key := yw.nextReadKey()
+	key, err := yw.nextReadKey()
+	if err != nil {
+		atomic.AddUint64(&yw.stats[readErrors], 1)
+		return err
+	}
 	readString := fmt.Sprintf("SELECT * FROM usertable WHERE ycsb_key=%d", key)
 	return crdb.ExecuteTx(yw.db, func(tx *sql.Tx) error {
-		res, err := tx.Query(readString)
-		if err != nil {
-			return err
+		res, inErr := tx.Query(readString)
+		if inErr != nil {
+			return inErr
 		}
 		var rowsFound int
 		for res.Next() {
@@ -329,8 +322,8 @@ func (yw *ycsbWorker) readRow() error {
 			fmt.Printf("reader found %d rows for key %d\n",
 				rowsFound, key)
 		}
-		if err := res.Close(); err != nil {
-			return err
+		if inErr := res.Close(); err != nil {
+			return inErr
 		}
 		if rowsFound > 0 {
 			atomic.AddUint64(&yw.stats[nonEmptyReads], 1)
@@ -478,11 +471,16 @@ func main() {
 	lastGlobalStats := make([]uint64, len(globalStats))
 	workers := make([]*ycsbWorker, *concurrency)
 
+	zipfR, err := NewZipfGenerator(zipfIMin, *initialLoad, zipfS, *verbose)
+	if err != nil {
+		panic(err)
+	}
+
 	loadStart := time.Now()
 	var wg sync.WaitGroup
 	for i := range workers {
 		wg.Add(1)
-		workers[i] = newYcsbWorker(db, i, *workload)
+		workers[i] = newYcsbWorker(db, zipfR, i, *workload)
 		go workers[i].runLoader(int(*initialLoad)/len(workers), len(workers), i, &wg)
 	}
 	wg.Wait()
