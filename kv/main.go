@@ -162,6 +162,7 @@ func (g *generator) randomBlock() []byte {
 type database interface {
 	read(key int64) error
 	write(count int, g *generator) error
+	clone() database
 }
 
 type blocker struct {
@@ -240,6 +241,10 @@ func (c *cockroach) write(count int, g *generator) error {
 	// ignoring duplicate key violation errors.
 	_, err := c.writeStmt.Exec(args...)
 	return err
+}
+
+func (c *cockroach) clone() database {
+	return c
 }
 
 func setupCockroach(parsedURL *url.URL) (database, error) {
@@ -339,6 +344,13 @@ func (m *mongo) write(count int, g *generator) error {
 	return m.kv.Insert(docs...)
 }
 
+func (m *mongo) clone() database {
+	return &mongo{
+		// NB: Whoa!
+		kv: m.kv.Database.Session.Copy().DB(m.kv.Database.Name).C(m.kv.Name),
+	}
+}
+
 func setupMongo(parsedURL *url.URL) (database, error) {
 	session, err := mgo.Dial(parsedURL.String())
 	if err != nil {
@@ -391,6 +403,10 @@ func (c *cassandra) write(count int, g *generator) error {
 
 	buf.WriteString("APPLY BATCH;")
 	return c.session.Query(buf.String(), args...).Exec()
+}
+
+func (c *cassandra) clone() database {
+	return c
 }
 
 func setupCassandra(parsedURL *url.URL) (database, error) {
@@ -496,7 +512,7 @@ func main() {
 	var wg sync.WaitGroup
 	for i := range writers {
 		wg.Add(1)
-		writers[i] = newBlocker(db, seq)
+		writers[i] = newBlocker(db.clone(), seq)
 		go writers[i].run(errCh, &wg)
 	}
 
