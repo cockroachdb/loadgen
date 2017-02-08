@@ -242,39 +242,38 @@ func (c *cockroach) write(count int, g *generator) error {
 	return err
 }
 
-func setupCockroach(parsedURL *url.URL) (database, error) {
+func setupCockroach(parsedURL *url.URL, firstTime bool) (database, error) {
 	// Open connection to server and create a database.
 	db, dbErr := sql.Open("postgres", parsedURL.String())
 	if dbErr != nil {
 		return nil, dbErr
 	}
-	if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS test"); err != nil {
-		return nil, err
-	}
 
-	// Allow a maximum of concurrency+1 connections to the database.
-	db.SetMaxOpenConns(*concurrency + 1)
-	db.SetMaxIdleConns(*concurrency + 1)
-
-	if *drop {
-		if _, err := db.Exec(`DROP TABLE IF EXISTS test.kv`); err != nil {
+	if firstTime {
+		if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS test"); err != nil {
 			return nil, err
 		}
-	}
 
-	if _, err := db.Exec(`
+		if *drop {
+			if _, err := db.Exec(`DROP TABLE IF EXISTS test.kv`); err != nil {
+				return nil, err
+			}
+		}
+
+		if _, err := db.Exec(`
 	CREATE TABLE IF NOT EXISTS test.kv (
 	  k BIGINT NOT NULL PRIMARY KEY,
 	  v BYTES NOT NULL
 	)`); err != nil {
-		return nil, err
-	}
+			return nil, err
+		}
 
-	if *splits > 0 {
-		r := rand.New(rand.NewSource(int64(time.Now().UnixNano())))
-		for i := 0; i < *splits; i++ {
-			if _, err := db.Exec(`ALTER TABLE test.kv SPLIT AT ($1)`, r.Int63()); err != nil {
-				return nil, err
+		if *splits > 0 {
+			r := rand.New(rand.NewSource(int64(time.Now().UnixNano())))
+			for i := 0; i < *splits; i++ {
+				if _, err := db.Exec(`ALTER TABLE test.kv SPLIT AT ($1)`, r.Int63()); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -339,7 +338,7 @@ func (m *mongo) write(count int, g *generator) error {
 	return m.kv.Insert(docs...)
 }
 
-func setupMongo(parsedURL *url.URL) (database, error) {
+func setupMongo(parsedURL *url.URL, firstTime bool) (database, error) {
 	session, err := mgo.Dial(parsedURL.String())
 	if err != nil {
 		panic(err)
@@ -349,7 +348,7 @@ func setupMongo(parsedURL *url.URL) (database, error) {
 	session.SetSafe(&mgo.Safe{WMode: *mongoWMode, J: *mongoJ})
 
 	kv := session.DB("test").C("kv")
-	if *drop {
+	if firstTime && *drop {
 		// Intentionally ignore the error as we can't tell if the collection
 		// doesn't exist.
 		_ = kv.DropCollection()
@@ -393,7 +392,7 @@ func (c *cassandra) write(count int, g *generator) error {
 	return c.session.Query(buf.String(), args...).Exec()
 }
 
-func setupCassandra(parsedURL *url.URL) (database, error) {
+func setupCassandra(parsedURL *url.URL, firstTime bool) (database, error) {
 	cluster := gocql.NewCluster(parsedURL.Host)
 	cluster.Consistency = gocql.ParseConsistency(*cassandraConsistency)
 	s, err := cluster.CreateSession()
@@ -401,28 +400,30 @@ func setupCassandra(parsedURL *url.URL) (database, error) {
 		log.Fatal(err)
 	}
 
-	if *drop {
-		_ = s.Query(`DROP KEYSPACE test`).RetryPolicy(nil).Exec()
-	}
+	if firstTime {
+		if *drop {
+			_ = s.Query(`DROP KEYSPACE test`).RetryPolicy(nil).Exec()
+		}
 
-	createKeyspace := fmt.Sprintf(`
+		createKeyspace := fmt.Sprintf(`
 CREATE KEYSPACE IF NOT EXISTS test WITH REPLICATION = {
   'class' : 'SimpleStrategy',
   'replication_factor' : %d
 };`, *cassandraReplication)
 
-	const createTable = `
+		const createTable = `
 CREATE TABLE IF NOT EXISTS test.kv(
   k BIGINT,
   v BLOB,
   PRIMARY KEY(k)
 );`
 
-	if err := s.Query(createKeyspace).RetryPolicy(nil).Exec(); err != nil {
-		log.Fatal(err)
-	}
-	if err := s.Query(createTable).RetryPolicy(nil).Exec(); err != nil {
-		log.Fatal(err)
+		if err := s.Query(createKeyspace).RetryPolicy(nil).Exec(); err != nil {
+			log.Fatal(err)
+		}
+		if err := s.Query(createTable).RetryPolicy(nil).Exec(); err != nil {
+			log.Fatal(err)
+		}
 	}
 	return &cassandra{session: s}, nil
 }
@@ -430,7 +431,8 @@ CREATE TABLE IF NOT EXISTS test.kv(
 // setupDatabase performs initial setup for the example, creating a database and
 // with a single table. If the desired table already exists on the cluster, the
 // existing table will be dropped.
-func setupDatabase(dbURL string) (database, error) {
+// If 'firstTime' is false, structures are not created or destroyed.
+func setupDatabase(dbURL string, firstTime bool) (database, error) {
 	parsedURL, err := url.Parse(dbURL)
 	if err != nil {
 		return nil, err
@@ -439,14 +441,31 @@ func setupDatabase(dbURL string) (database, error) {
 
 	switch parsedURL.Scheme {
 	case "postgres", "postgresql":
-		return setupCockroach(parsedURL)
+		return setupCockroach(parsedURL, firstTime)
 	case "mongodb":
-		return setupMongo(parsedURL)
+		return setupMongo(parsedURL, firstTime)
 	case "cassandra":
-		return setupCassandra(parsedURL)
+		return setupCassandra(parsedURL, firstTime)
 	default:
 		return nil, fmt.Errorf("unsupported database: %s", parsedURL.Scheme)
 	}
+}
+
+func trySetupDatabase(dbURL string, firstTime bool) database {
+	var db database
+	{
+		var err error
+		for err == nil || *tolerateErrors {
+			db, err = setupDatabase(dbURL, firstTime)
+			if err == nil {
+				break
+			}
+			if !*tolerateErrors {
+				log.Fatal(err)
+			}
+		}
+	}
+	return db
 }
 
 var usage = func() {
@@ -472,20 +491,6 @@ func main() {
 		log.Fatalf("Value of 'max-block-bytes' (%d) must be greater than or equal to value of 'min-block-bytes' (%d)", max, min)
 	}
 
-	var db database
-	{
-		var err error
-		for err == nil || *tolerateErrors {
-			db, err = setupDatabase(dbURL)
-			if err == nil {
-				break
-			}
-			if !*tolerateErrors {
-				log.Fatal(err)
-			}
-		}
-	}
-
 	lastNow := time.Now()
 	start := lastNow
 	var lastOps uint64
@@ -496,6 +501,7 @@ func main() {
 	var wg sync.WaitGroup
 	for i := range writers {
 		wg.Add(1)
+		db := trySetupDatabase(dbURL, i == 0 /* firstTime */)
 		writers[i] = newBlocker(db, seq)
 		go writers[i].run(errCh, &wg)
 	}
