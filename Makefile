@@ -47,6 +47,10 @@ kv:
 ycsb:
 	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o ycsb/ycsb ./ycsb
 
+.PHONY: tpch
+tpch:
+	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o tpch/tpch ./tpch
+
 .PHONY: check
 check:
 	@echo "checking for tabs in shell scripts"
