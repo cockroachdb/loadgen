@@ -1,0 +1,61 @@
+README
+---
+
+
+About TPC-H
+===
+
+TPC-H is a read-only workload of "analytics" queries on large datasets.
+
+TPC-H datasets are scaled by a "scale factor", which is a multiplier of the
+number of rows in each table.
+
+Tables, and rows per table:
+
+nation      25
+region      5
+part        200000*SF
+supplier    10000*SF
+partsupp    800000*SF
+customer    150000*SF
+orders      1500000*SF
+lineitems   6001215*SF
+
+At scale factor = 1, the data in raw text is about 1gb, and 5gb of data on disk
+per node (in a 3 node cluster). For perspective, scale factor 300 is a common
+test, and scale factor 100000 (100 terabytes) is the largest official TPC-H test.
+
+
+Loading TPC-H data
+===
+
+In order to run the TPC-H loader, you will need to obtain a set of .tbl files
+for the raw data in the 8 tables, and put them in the folder tpch/data. tbl
+files can be run by compiling and running the "dbgen" program distributed by
+the TPC. If you do not want to run dbgen, a tarball of a set of tbl files (at
+scale factor 1) is available on Google Drive at
+https://drive.google.com/open?id=0B2yAkR0eFsMEYlJtOWJ0SWZrcTg
+
+Then, running
+    ./tpch -load
+will load the data into Cockroach. This currently takes a lot of time (~5 hours
+on a gceworker). In order to circumvent that, it is advisable to use the
+enterprise backup/restore feature, as a backup dump is available
+https://drive.google.com/open?id=0B2yAkR0eFsMEQlNHekhlaE5VTXM
+
+This takes considerably less time, on the order of minutes. In order to restore
+it, start a cockroach cluster with the following flags:
+
+COCKROACH_PROPOSER_EVALUATED_KV=true COCKROACH_ENTERPRISE_ENABLED=true ./cockroach start
+
+Then run:
+    ./tpch -restore=/path/to/backup
+
+Once this finishes (minutes), you can shut down the cockroach cluster and
+restart it without those flags for actually running queries.
+
+Running TPC-H queries
+===
+
+Currently, not all queries can be run, due to the use of features such as
+correlated subqueries. Those queries that do run are set to run by default.

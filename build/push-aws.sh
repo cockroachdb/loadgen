@@ -37,6 +37,6 @@ function push_one_binary {
   rm -f ${tmpfile}
 }
 
-for proj in kv ycsb; do
+for proj in kv ycsb tpch ; do
   push_one_binary ${proj}/${proj}
 done
