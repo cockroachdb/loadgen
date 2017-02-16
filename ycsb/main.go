@@ -517,7 +517,7 @@ func main() {
 
 		case <-tick:
 			now := time.Now()
-			elapsed := time.Since(lastNow)
+			elapsed := now.Sub(lastNow)
 
 			stats := snapshotStats()
 			opsCount := stats[writes] + stats[emptyReads] +
