@@ -285,10 +285,7 @@ func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
 	values := strings.Join(fields, ", ")
 	// TODO(arjun): Consider using a prepared statement here.
 	insertString := fmt.Sprintf("INSERT INTO usertable VALUES (%s)", values)
-	err := crdb.ExecuteTx(yw.db, func(tx *sql.Tx) error {
-		_, inErr := tx.Exec(insertString)
-		return inErr
-	})
+	_, err := yw.db.Exec(insertString)
 	if err != nil {
 		return err
 	}
@@ -309,29 +306,27 @@ func (yw *ycsbWorker) readRow() error {
 		return err
 	}
 	readString := fmt.Sprintf("SELECT * FROM usertable WHERE ycsb_key=%d", key)
-	return crdb.ExecuteTx(yw.db, func(tx *sql.Tx) error {
-		res, inErr := tx.Query(readString)
-		if inErr != nil {
-			return inErr
-		}
-		var rowsFound int
-		for res.Next() {
-			rowsFound++
-		}
-		if *verbose {
-			fmt.Printf("reader found %d rows for key %d\n",
-				rowsFound, key)
-		}
-		if inErr := res.Close(); err != nil {
-			return inErr
-		}
-		if rowsFound > 0 {
-			atomic.AddUint64(&yw.stats[nonEmptyReads], 1)
-			return nil
-		}
-		atomic.AddUint64(&yw.stats[emptyReads], 1)
+	res, err := yw.db.Query(readString)
+	if err != nil {
+		return err
+	}
+	var rowsFound int
+	for res.Next() {
+		rowsFound++
+	}
+	if *verbose {
+		fmt.Printf("reader found %d rows for key %d\n",
+			rowsFound, key)
+	}
+	if err := res.Close(); err != nil {
+		return err
+	}
+	if rowsFound > 0 {
+		atomic.AddUint64(&yw.stats[nonEmptyReads], 1)
 		return nil
-	})
+	}
+	atomic.AddUint64(&yw.stats[emptyReads], 1)
+	return nil
 }
 
 func (yw *ycsbWorker) scanRows() error {
