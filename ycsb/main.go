@@ -87,6 +87,7 @@ type ycsbWorker struct {
 	scanFreq      float32
 	minNanosPerOp time.Duration
 	hashFunc      hash.Hash64
+	hashBuf       [8]byte
 }
 
 type statistic int
@@ -174,9 +175,9 @@ func (yw *ycsbWorker) hashKey(key []byte, maxValue uint64) uint64 {
 func (yw *ycsbWorker) nextReadKey() (uint64, error) {
 	var hashedKey uint64
 	draw := yw.zipfR.Uint64()
-	buf := make([]byte, 8)
-	binary.PutUvarint(buf, draw)
-	hashedKey = yw.hashKey(buf, *maxWrites)
+	yw.hashBuf = [8]byte{}
+	binary.PutUvarint(yw.hashBuf[:], draw)
+	hashedKey = yw.hashKey(yw.hashBuf[:], *maxWrites)
 	if *verbose {
 		fmt.Printf("reader drew: %d -> %d\n", draw, hashedKey)
 	}
@@ -185,9 +186,9 @@ func (yw *ycsbWorker) nextReadKey() (uint64, error) {
 
 func (yw *ycsbWorker) nextWriteKey() uint64 {
 	key := yw.zipfR.IMaxHead()
-	buf := make([]byte, 8)
-	binary.PutUvarint(buf, key)
-	hashedKey := yw.hashKey(buf, *maxWrites)
+	yw.hashBuf = [8]byte{}
+	binary.PutUvarint(yw.hashBuf[:], key)
+	hashedKey := yw.hashKey(yw.hashBuf[:], *maxWrites)
 	if *verbose {
 		fmt.Printf("writer drew: fnv(%d) -> %d\n", key, hashedKey)
 	}
@@ -313,8 +314,7 @@ func (yw *ycsbWorker) readRow() error {
 		rowsFound++
 	}
 	if *verbose {
-		fmt.Printf("reader found %d rows for key %d\n",
-			rowsFound, key)
+		fmt.Printf("reader found %d rows for key %d\n", rowsFound, key)
 	}
 	if err := res.Close(); err != nil {
 		return err
