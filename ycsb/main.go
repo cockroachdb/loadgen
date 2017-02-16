@@ -400,7 +400,7 @@ func setupDatabase(dbURL string) (*sql.DB, error) {
 
 	// Create the initial table for storing blocks.
 	createStmt := `
-	CREATE TABLE IF NOT EXISTS usertable(
+CREATE TABLE IF NOT EXISTS usertable(
 	ycsb_key INT PRIMARY KEY NOT NULL,
 	FIELD1 TEXT, 
 	FIELD2 TEXT, 
@@ -466,7 +466,6 @@ func main() {
 	}
 
 	lastNow := time.Now()
-	start := lastNow
 	var opsCount, lastOpsCount uint64
 	lastGlobalStats := make([]uint64, len(globalStats))
 	workers := make([]*ycsbWorker, *concurrency)
@@ -514,6 +513,7 @@ func main() {
 		}()
 	}
 
+	start := time.Now()
 	for i := 0; ; {
 		select {
 		case err := <-errCh:
@@ -537,22 +537,25 @@ func main() {
 			opsCount = globalStats[writes] + globalStats[emptyReads] +
 				globalStats[nonEmptyReads] + globalStats[scans]
 			if i%20 == 0 {
-				fmt.Printf("elapsed______ops/sec____emptyReads_nonEmptyReads______writes________scans___readErrors___scanErrors__writeErrors\n")
+				fmt.Printf("elapsed______ops/sec__reads/empty/errors___writes/errors____scans/errors\n")
 			}
-			fmt.Printf("%7s %9.1f/sec %12d %12d %12d %12d %12d %12d %12d\n",
+			fmt.Printf("%7s %12.1f %19s %15s %15s\n",
 				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
 				float64(opsCount-lastOpsCount)/elapsed.Seconds(),
-				globalStats[emptyReads]-lastGlobalStats[emptyReads],
-				globalStats[nonEmptyReads]-lastGlobalStats[nonEmptyReads],
-				globalStats[writes]-lastGlobalStats[writes],
-				globalStats[scans]-lastGlobalStats[scans],
-				globalStats[readErrors]-lastGlobalStats[readErrors],
-				globalStats[scanErrors]-lastGlobalStats[scanErrors],
-				globalStats[writeErrors]-lastGlobalStats[writeErrors],
-			)
+				fmt.Sprintf("%d / %d / %d",
+					globalStats[nonEmptyReads]-lastGlobalStats[nonEmptyReads],
+					globalStats[emptyReads]-lastGlobalStats[emptyReads],
+					globalStats[readErrors]-lastGlobalStats[readErrors]),
+				fmt.Sprintf("%d / %d",
+					globalStats[writes]-lastGlobalStats[writes],
+					globalStats[writeErrors]-lastGlobalStats[writeErrors]),
+				fmt.Sprintf("%d / %d",
+					globalStats[scans]-lastGlobalStats[scans],
+					globalStats[scanErrors]-lastGlobalStats[scanErrors]))
 			lastOpsCount = opsCount
 			lastNow = now
 			i++
+
 		case <-done:
 			fmt.Printf(" (%d total errors)\n", numErr)
 			return
