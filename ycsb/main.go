@@ -39,7 +39,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cockroachdb/cockroach-go/crdb"
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
 )
@@ -283,7 +282,7 @@ func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
 	}
 	values := strings.Join(fields, ", ")
 	// TODO(arjun): Consider using a prepared statement here.
-	insertString := fmt.Sprintf("INSERT INTO usertable VALUES (%s)", values)
+	insertString := fmt.Sprintf("INSERT INTO ycsb.usertable VALUES (%s)", values)
 	_, err := yw.db.Exec(insertString)
 	if err != nil {
 		return err
@@ -304,7 +303,7 @@ func (yw *ycsbWorker) readRow() error {
 		atomic.AddUint64(&globalStats[readErrors], 1)
 		return err
 	}
-	readString := fmt.Sprintf("SELECT * FROM usertable WHERE ycsb_key=%d", key)
+	readString := fmt.Sprintf("SELECT * FROM ycsb.usertable WHERE ycsb_key=%d", key)
 	res, err := yw.db.Query(readString)
 	if err != nil {
 		return err
@@ -364,11 +363,7 @@ func setupDatabase(dbURL string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	err = crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-		_, inErr := db.Exec("CREATE DATABASE IF NOT EXISTS ycsb")
-		return inErr
-	})
-	if err != nil {
+	if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS ycsb"); err != nil {
 		if *verbose {
 			fmt.Printf("Failed to create the database, attempting to continue... %s\n",
 				err)
@@ -379,11 +374,7 @@ func setupDatabase(dbURL string) (*sql.DB, error) {
 		if *verbose {
 			fmt.Println("Dropping the table")
 		}
-		err = crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-			_, inErr := db.Exec("DROP TABLE IF EXISTS usertable")
-			return inErr
-		})
-		if err != nil {
+		if _, err := db.Exec("DROP TABLE IF EXISTS ycsb.usertable"); err != nil {
 			if *verbose {
 				fmt.Printf("Failed to drop the table: %s\n", err)
 			}
@@ -393,7 +384,7 @@ func setupDatabase(dbURL string) (*sql.DB, error) {
 
 	// Create the initial table for storing blocks.
 	createStmt := `
-CREATE TABLE IF NOT EXISTS usertable(
+CREATE TABLE IF NOT EXISTS ycsb.usertable (
 	ycsb_key INT PRIMARY KEY NOT NULL,
 	FIELD1 TEXT, 
 	FIELD2 TEXT, 
