@@ -571,7 +571,7 @@ func main() {
 			pMax := h.ValueAtQuantile(100)
 
 			now := time.Now()
-			elapsed := time.Since(lastNow)
+			elapsed := now.Sub(lastNow)
 			ops := atomic.LoadUint64(&numOps)
 			if i%20 == 0 {
 				fmt.Println("_elapsed___errors__ops/sec(inst)___ops/sec(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")

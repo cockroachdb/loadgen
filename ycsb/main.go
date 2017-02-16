@@ -87,7 +87,7 @@ type ycsbWorker struct {
 	scanFreq      float32
 	minNanosPerOp time.Duration
 	hashFunc      hash.Hash64
-	stats         [statsLength]uint64
+	hashBuf       [8]byte
 }
 
 type statistic int
@@ -156,7 +156,6 @@ func newYcsbWorker(db *sql.DB, zipfR *ZipfGenerator, id int, workloadFlag string
 		scanFreq:      scanFreq,
 		minNanosPerOp: minNanosPerOp,
 		hashFunc:      fnv.New64(),
-		stats:         [statsLength]uint64{},
 	}
 }
 
@@ -176,9 +175,9 @@ func (yw *ycsbWorker) hashKey(key []byte, maxValue uint64) uint64 {
 func (yw *ycsbWorker) nextReadKey() (uint64, error) {
 	var hashedKey uint64
 	draw := yw.zipfR.Uint64()
-	buf := make([]byte, 8)
-	binary.PutUvarint(buf, draw)
-	hashedKey = yw.hashKey(buf, *maxWrites)
+	yw.hashBuf = [8]byte{}
+	binary.PutUvarint(yw.hashBuf[:], draw)
+	hashedKey = yw.hashKey(yw.hashBuf[:], *maxWrites)
 	if *verbose {
 		fmt.Printf("reader drew: %d -> %d\n", draw, hashedKey)
 	}
@@ -187,9 +186,9 @@ func (yw *ycsbWorker) nextReadKey() (uint64, error) {
 
 func (yw *ycsbWorker) nextWriteKey() uint64 {
 	key := yw.zipfR.IMaxHead()
-	buf := make([]byte, 8)
-	binary.PutUvarint(buf, key)
-	hashedKey := yw.hashKey(buf, *maxWrites)
+	yw.hashBuf = [8]byte{}
+	binary.PutUvarint(yw.hashBuf[:], key)
+	hashedKey := yw.hashKey(yw.hashBuf[:], *maxWrites)
 	if *verbose {
 		fmt.Printf("writer drew: fnv(%d) -> %d\n", key, hashedKey)
 	}
@@ -208,16 +207,16 @@ func (yw *ycsbWorker) runLoader(n int, numWorkers int, thisWorkerNum int, wg *sy
 	if *verbose {
 		fmt.Printf("Worker %d loading %d rows of data\n", yw.workerID, n)
 	}
+	buf := make([]byte, 8)
 	for i := 0; i < n; i++ {
 		key := uint64((i * numWorkers) + thisWorkerNum)
-		buf := make([]byte, 8)
 		binary.PutUvarint(buf, key)
 		hashedKey := yw.hashKey(buf, *maxWrites)
 		if err := yw.insertRow(hashedKey, false); err != nil {
 			if *verbose {
 				fmt.Printf("error loading row %d: %s\n", i, err)
 			}
-			atomic.AddUint64(&yw.stats[writeErrors], 1)
+			atomic.AddUint64(&globalStats[writeErrors], 1)
 		}
 	}
 }
@@ -237,7 +236,7 @@ func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
 		switch yw.chooseOp() {
 		case readOp:
 			if err := yw.readRow(); err != nil {
-				atomic.AddUint64(&yw.stats[readErrors], 1)
+				atomic.AddUint64(&globalStats[readErrors], 1)
 				errCh <- err
 			}
 		case writeOp:
@@ -247,11 +246,11 @@ func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
 			key := yw.nextWriteKey()
 			if err := yw.insertRow(key, true); err != nil {
 				errCh <- err
-				atomic.AddUint64(&yw.stats[writeErrors], 1)
+				atomic.AddUint64(&globalStats[writeErrors], 1)
 			}
 		case scanOp:
 			if err := yw.scanRows(); err != nil {
-				atomic.AddUint64(&yw.stats[scanErrors], 1)
+				atomic.AddUint64(&globalStats[scanErrors], 1)
 				errCh <- err
 			}
 
@@ -285,10 +284,7 @@ func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
 	values := strings.Join(fields, ", ")
 	// TODO(arjun): Consider using a prepared statement here.
 	insertString := fmt.Sprintf("INSERT INTO usertable VALUES (%s)", values)
-	err := crdb.ExecuteTx(yw.db, func(tx *sql.Tx) error {
-		_, inErr := tx.Exec(insertString)
-		return inErr
-	})
+	_, err := yw.db.Exec(insertString)
 	if err != nil {
 		return err
 	}
@@ -298,44 +294,41 @@ func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
 			return err
 		}
 	}
-	atomic.AddUint64(&yw.stats[writes], 1)
+	atomic.AddUint64(&globalStats[writes], 1)
 	return nil
 }
 
 func (yw *ycsbWorker) readRow() error {
 	key, err := yw.nextReadKey()
 	if err != nil {
-		atomic.AddUint64(&yw.stats[readErrors], 1)
+		atomic.AddUint64(&globalStats[readErrors], 1)
 		return err
 	}
 	readString := fmt.Sprintf("SELECT * FROM usertable WHERE ycsb_key=%d", key)
-	return crdb.ExecuteTx(yw.db, func(tx *sql.Tx) error {
-		res, inErr := tx.Query(readString)
-		if inErr != nil {
-			return inErr
-		}
-		var rowsFound int
-		for res.Next() {
-			rowsFound++
-		}
-		if *verbose {
-			fmt.Printf("reader found %d rows for key %d\n",
-				rowsFound, key)
-		}
-		if inErr := res.Close(); err != nil {
-			return inErr
-		}
-		if rowsFound > 0 {
-			atomic.AddUint64(&yw.stats[nonEmptyReads], 1)
-			return nil
-		}
-		atomic.AddUint64(&yw.stats[emptyReads], 1)
+	res, err := yw.db.Query(readString)
+	if err != nil {
+		return err
+	}
+	var rowsFound int
+	for res.Next() {
+		rowsFound++
+	}
+	if *verbose {
+		fmt.Printf("reader found %d rows for key %d\n", rowsFound, key)
+	}
+	if err := res.Close(); err != nil {
+		return err
+	}
+	if rowsFound > 0 {
+		atomic.AddUint64(&globalStats[nonEmptyReads], 1)
 		return nil
-	})
+	}
+	atomic.AddUint64(&globalStats[emptyReads], 1)
+	return nil
 }
 
 func (yw *ycsbWorker) scanRows() error {
-	atomic.AddUint64(&yw.stats[scans], 1)
+	atomic.AddUint64(&globalStats[scans], 1)
 	return errors.Errorf("not implemented yet")
 }
 
@@ -400,7 +393,7 @@ func setupDatabase(dbURL string) (*sql.DB, error) {
 
 	// Create the initial table for storing blocks.
 	createStmt := `
-	CREATE TABLE IF NOT EXISTS usertable(
+CREATE TABLE IF NOT EXISTS usertable(
 	ycsb_key INT PRIMARY KEY NOT NULL,
 	FIELD1 TEXT, 
 	FIELD2 TEXT, 
@@ -426,17 +419,11 @@ var usage = func() {
 	flag.PrintDefaults()
 }
 
-// Periodically we compute global statistics to print by aggregating all the
-// individual worker stats.
-func updateGlobalStats(workers []*ycsbWorker) {
+func snapshotStats() (s [statsLength]uint64) {
 	for i := 0; i < int(statsLength); i++ {
-		globalStats[i] = 0
+		s[i] = atomic.LoadUint64(&globalStats[i])
 	}
-	for _, worker := range workers {
-		for i := 0; i < int(statsLength); i++ {
-			globalStats[i] += worker.stats[i]
-		}
-	}
+	return s
 }
 
 func main() {
@@ -466,9 +453,8 @@ func main() {
 	}
 
 	lastNow := time.Now()
-	start := lastNow
-	var opsCount, lastOpsCount uint64
-	lastGlobalStats := make([]uint64, len(globalStats))
+	var lastOpsCount uint64
+	var lastStats [statsLength]uint64
 	workers := make([]*ycsbWorker, *concurrency)
 
 	zipfR, err := NewZipfGenerator(zipfIMin, *initialLoad, zipfS, *verbose)
@@ -514,6 +500,10 @@ func main() {
 		}()
 	}
 
+	start := time.Now()
+	startOpsCount := globalStats[writes] + globalStats[emptyReads] +
+		globalStats[nonEmptyReads] + globalStats[scans]
+
 	for i := 0; ; {
 		select {
 		case err := <-errCh:
@@ -527,34 +517,41 @@ func main() {
 
 		case <-tick:
 			now := time.Now()
-			elapsed := time.Since(lastNow)
+			elapsed := now.Sub(lastNow)
 
-			for j := 0; j < len(globalStats); j++ {
-				lastGlobalStats[j] = globalStats[j]
-			}
-			updateGlobalStats(workers)
-			lastOpsCount = opsCount
-			opsCount = globalStats[writes] + globalStats[emptyReads] +
-				globalStats[nonEmptyReads] + globalStats[scans]
+			stats := snapshotStats()
+			opsCount := stats[writes] + stats[emptyReads] +
+				stats[nonEmptyReads] + stats[scans]
 			if i%20 == 0 {
-				fmt.Printf("elapsed______ops/sec____emptyReads_nonEmptyReads______writes________scans___readErrors___scanErrors__writeErrors\n")
+				fmt.Printf("elapsed______ops/sec__reads/empty/errors___writes/errors____scans/errors\n")
 			}
-			fmt.Printf("%7s %9.1f/sec %12d %12d %12d %12d %12d %12d %12d\n",
+			fmt.Printf("%7s %12.1f %19s %15s %15s\n",
 				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
 				float64(opsCount-lastOpsCount)/elapsed.Seconds(),
-				globalStats[emptyReads]-lastGlobalStats[emptyReads],
-				globalStats[nonEmptyReads]-lastGlobalStats[nonEmptyReads],
-				globalStats[writes]-lastGlobalStats[writes],
-				globalStats[scans]-lastGlobalStats[scans],
-				globalStats[readErrors]-lastGlobalStats[readErrors],
-				globalStats[scanErrors]-lastGlobalStats[scanErrors],
-				globalStats[writeErrors]-lastGlobalStats[writeErrors],
-			)
+				fmt.Sprintf("%d / %d / %d",
+					stats[nonEmptyReads]-lastStats[nonEmptyReads],
+					stats[emptyReads]-lastStats[emptyReads],
+					stats[readErrors]-lastStats[readErrors]),
+				fmt.Sprintf("%d / %d",
+					stats[writes]-lastStats[writes],
+					stats[writeErrors]-lastStats[writeErrors]),
+				fmt.Sprintf("%d / %d",
+					stats[scans]-lastStats[scans],
+					stats[scanErrors]-lastStats[scanErrors]))
+			lastStats = stats
 			lastOpsCount = opsCount
 			lastNow = now
 			i++
+
 		case <-done:
-			fmt.Printf(" (%d total errors)\n", numErr)
+			stats := snapshotStats()
+			opsCount := stats[writes] + stats[emptyReads] +
+				stats[nonEmptyReads] + stats[scans] - startOpsCount
+			elapsed := time.Since(start).Seconds()
+			fmt.Printf("\nelapsed__ops/sec(total)__errors(total)\n")
+			fmt.Printf("%6.1fs %14.1f %14d\n",
+				time.Since(start).Seconds(),
+				float64(opsCount)/elapsed, numErr)
 			return
 		}
 	}
