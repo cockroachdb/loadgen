@@ -73,6 +73,8 @@ var initialLoad = flag.Uint64("initial-load", 10000,
 var maxWrites = flag.Uint64("max-writes", 7*24*3600*1500,
 	"Maximum number of writes to perform before halting. This is required for accurately generating keys that are uniformly distributed across the keyspace.")
 
+var splits = flag.Int("splits", 0, "Number of splits to perform before starting normal operations")
+
 // ycsbWorker independently issues reads, writes, and scans against the database.
 type ycsbWorker struct {
 	workerID int
@@ -158,9 +160,11 @@ func newYcsbWorker(db *sql.DB, zipfR *ZipfGenerator, id int, workloadFlag string
 	}
 }
 
-func (yw *ycsbWorker) hashKey(key []byte, maxValue uint64) uint64 {
+func (yw *ycsbWorker) hashKey(key, maxValue uint64) uint64 {
+	yw.hashBuf = [8]byte{} // clear hashBuf
+	binary.PutUvarint(yw.hashBuf[:], key)
 	yw.hashFunc.Reset()
-	if _, err := yw.hashFunc.Write(key); err != nil {
+	if _, err := yw.hashFunc.Write(yw.hashBuf[:]); err != nil {
 		panic(err)
 	}
 	hashedKey := yw.hashFunc.Sum64()
@@ -174,9 +178,7 @@ func (yw *ycsbWorker) hashKey(key []byte, maxValue uint64) uint64 {
 func (yw *ycsbWorker) nextReadKey() (uint64, error) {
 	var hashedKey uint64
 	draw := yw.zipfR.Uint64()
-	yw.hashBuf = [8]byte{}
-	binary.PutUvarint(yw.hashBuf[:], draw)
-	hashedKey = yw.hashKey(yw.hashBuf[:], *maxWrites)
+	hashedKey = yw.hashKey(draw, *maxWrites)
 	if *verbose {
 		fmt.Printf("reader drew: %d -> %d\n", draw, hashedKey)
 	}
@@ -185,9 +187,7 @@ func (yw *ycsbWorker) nextReadKey() (uint64, error) {
 
 func (yw *ycsbWorker) nextWriteKey() uint64 {
 	key := yw.zipfR.IMaxHead()
-	yw.hashBuf = [8]byte{}
-	binary.PutUvarint(yw.hashBuf[:], key)
-	hashedKey := yw.hashKey(yw.hashBuf[:], *maxWrites)
+	hashedKey := yw.hashKey(key, *maxWrites)
 	if *verbose {
 		fmt.Printf("writer drew: fnv(%d) -> %d\n", key, hashedKey)
 	}
@@ -206,11 +206,9 @@ func (yw *ycsbWorker) runLoader(n int, numWorkers int, thisWorkerNum int, wg *sy
 	if *verbose {
 		fmt.Printf("Worker %d loading %d rows of data\n", yw.workerID, n)
 	}
-	buf := make([]byte, 8)
 	for i := 0; i < n; i++ {
 		key := uint64((i * numWorkers) + thisWorkerNum)
-		binary.PutUvarint(buf, key)
-		hashedKey := yw.hashKey(buf, *maxWrites)
+		hashedKey := yw.hashKey(key, *maxWrites)
 		if err := yw.insertRow(hashedKey, false); err != nil {
 			if *verbose {
 				fmt.Printf("error loading row %d: %s\n", i, err)
@@ -252,7 +250,6 @@ func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
 				atomic.AddUint64(&globalStats[scanErrors], 1)
 				errCh <- err
 			}
-
 		}
 
 		// If we are done faster than the rate limit, wait.
@@ -446,18 +443,31 @@ func main() {
 	lastNow := time.Now()
 	var lastOpsCount uint64
 	var lastStats [statsLength]uint64
-	workers := make([]*ycsbWorker, *concurrency)
 
 	zipfR, err := NewZipfGenerator(zipfIMin, *initialLoad, zipfS, *verbose)
 	if err != nil {
 		panic(err)
 	}
 
+	workers := make([]*ycsbWorker, *concurrency)
+	for i := range workers {
+		workers[i] = newYcsbWorker(db, zipfR, i, *workload)
+	}
+
+	if *splits > 0 {
+		for i := 0; i < *splits; i++ {
+			key := workers[0].hashKey(uint64(i), *maxWrites)
+			fmt.Printf("splitting at %d\n", key)
+			if _, err := db.Exec(`ALTER TABLE ycsb.usertable SPLIT AT ($1)`, key); err != nil {
+				log.Fatal(err)
+			}
+		}
+	}
+
 	loadStart := time.Now()
 	var wg sync.WaitGroup
 	for i := range workers {
 		wg.Add(1)
-		workers[i] = newYcsbWorker(db, zipfR, i, *workload)
 		go workers[i].runLoader(int(*initialLoad)/len(workers), len(workers), i, &wg)
 	}
 	wg.Wait()
