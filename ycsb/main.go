@@ -360,6 +360,10 @@ func setupDatabase(dbURL string) (*sql.DB, error) {
 		return nil, err
 	}
 
+	// Allow a maximum of concurrency+1 connections to the database.
+	db.SetMaxOpenConns(*concurrency + 1)
+	db.SetMaxIdleConns(*concurrency + 1)
+
 	if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS ycsb"); err != nil {
 		if *verbose {
 			fmt.Printf("Failed to create the database, attempting to continue... %s\n",
