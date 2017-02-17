@@ -461,7 +461,6 @@ func main() {
 	if *splits > 0 {
 		for i := 0; i < *splits; i++ {
 			key := workers[0].hashKey(uint64(i), *maxWrites)
-			fmt.Printf("splitting at %d\n", key)
 			if _, err := db.Exec(`ALTER TABLE ycsb.usertable SPLIT AT ($1)`, key); err != nil {
 				log.Fatal(err)
 			}
