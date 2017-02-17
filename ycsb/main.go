@@ -160,9 +160,11 @@ func newYcsbWorker(db *sql.DB, zipfR *ZipfGenerator, id int, workloadFlag string
 	}
 }
 
-func (yw *ycsbWorker) hashKey(key []byte, maxValue uint64) uint64 {
+func (yw *ycsbWorker) hashKey(key, maxValue uint64) uint64 {
+	yw.hashBuf = [8]byte{} // clear hashBuf
+	binary.PutUvarint(yw.hashBuf[:], key)
 	yw.hashFunc.Reset()
-	if _, err := yw.hashFunc.Write(key); err != nil {
+	if _, err := yw.hashFunc.Write(yw.hashBuf[:]); err != nil {
 		panic(err)
 	}
 	hashedKey := yw.hashFunc.Sum64()
@@ -176,9 +178,7 @@ func (yw *ycsbWorker) hashKey(key []byte, maxValue uint64) uint64 {
 func (yw *ycsbWorker) nextReadKey() (uint64, error) {
 	var hashedKey uint64
 	draw := yw.zipfR.Uint64()
-	yw.hashBuf = [8]byte{}
-	binary.PutUvarint(yw.hashBuf[:], draw)
-	hashedKey = yw.hashKey(yw.hashBuf[:], *maxWrites)
+	hashedKey = yw.hashKey(draw, *maxWrites)
 	if *verbose {
 		fmt.Printf("reader drew: %d -> %d\n", draw, hashedKey)
 	}
@@ -187,9 +187,7 @@ func (yw *ycsbWorker) nextReadKey() (uint64, error) {
 
 func (yw *ycsbWorker) nextWriteKey() uint64 {
 	key := yw.zipfR.IMaxHead()
-	yw.hashBuf = [8]byte{}
-	binary.PutUvarint(yw.hashBuf[:], key)
-	hashedKey := yw.hashKey(yw.hashBuf[:], *maxWrites)
+	hashedKey := yw.hashKey(key, *maxWrites)
 	if *verbose {
 		fmt.Printf("writer drew: fnv(%d) -> %d\n", key, hashedKey)
 	}
@@ -208,12 +206,9 @@ func (yw *ycsbWorker) runLoader(n int, numWorkers int, thisWorkerNum int, wg *sy
 	if *verbose {
 		fmt.Printf("Worker %d loading %d rows of data\n", yw.workerID, n)
 	}
-	var buf [8]byte
 	for i := 0; i < n; i++ {
-		buf = [8]byte{} // clear buf on every iteration
 		key := uint64((i * numWorkers) + thisWorkerNum)
-		binary.PutUvarint(buf[:], key)
-		hashedKey := yw.hashKey(buf[:], *maxWrites)
+		hashedKey := yw.hashKey(key, *maxWrites)
 		if err := yw.insertRow(hashedKey, false); err != nil {
 			if *verbose {
 				fmt.Printf("error loading row %d: %s\n", i, err)
