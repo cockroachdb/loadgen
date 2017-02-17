@@ -73,6 +73,8 @@ var initialLoad = flag.Uint64("initial-load", 10000,
 var maxWrites = flag.Uint64("max-writes", 7*24*3600*1500,
 	"Maximum number of writes to perform before halting. This is required for accurately generating keys that are uniformly distributed across the keyspace.")
 
+var splits = flag.Int("splits", 0, "Number of splits to perform before starting normal operations")
+
 // ycsbWorker independently issues reads, writes, and scans against the database.
 type ycsbWorker struct {
 	workerID int
@@ -206,11 +208,12 @@ func (yw *ycsbWorker) runLoader(n int, numWorkers int, thisWorkerNum int, wg *sy
 	if *verbose {
 		fmt.Printf("Worker %d loading %d rows of data\n", yw.workerID, n)
 	}
-	buf := make([]byte, 8)
+	var buf [8]byte
 	for i := 0; i < n; i++ {
+		buf = [8]byte{} // clear buf on every iteration
 		key := uint64((i * numWorkers) + thisWorkerNum)
-		binary.PutUvarint(buf, key)
-		hashedKey := yw.hashKey(buf, *maxWrites)
+		binary.PutUvarint(buf[:], key)
+		hashedKey := yw.hashKey(buf[:], *maxWrites)
 		if err := yw.insertRow(hashedKey, false); err != nil {
 			if *verbose {
 				fmt.Printf("error loading row %d: %s\n", i, err)
@@ -252,7 +255,6 @@ func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
 				atomic.AddUint64(&globalStats[scanErrors], 1)
 				errCh <- err
 			}
-
 		}
 
 		// If we are done faster than the rate limit, wait.
@@ -399,6 +401,17 @@ CREATE TABLE IF NOT EXISTS ycsb.usertable (
 )`
 	if _, err := db.Exec(createStmt); err != nil {
 		return nil, err
+	}
+
+	if *splits > 0 {
+		r := rand.New(rand.NewSource(int64(time.Now().UnixNano())))
+		for i := 0; i < *splits; i++ {
+			if _, err := db.Exec(`ALTER TABLE ycsb.usertable SPLIT AT ($1)`,
+				r.Int63n(int64(*maxWrites)),
+			); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return db, nil
