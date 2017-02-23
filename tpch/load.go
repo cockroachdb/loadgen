@@ -31,10 +31,10 @@ import (
 	"github.com/pkg/errors"
 )
 
-func doInserts(db *sql.DB, inserts []string) error {
+func doInserts(db *sql.DB, preamble string, inserts []string) error {
 	return crdb.ExecuteTx(db, func(*sql.Tx) error {
-		allInserts := strings.Join(inserts, "; ")
-		_, inErr := db.Exec(allInserts)
+		allInserts := strings.Join(inserts, ", ")
+		_, inErr := db.Exec(fmt.Sprintf("%s%s", preamble, allInserts))
 		return inErr
 	})
 }
@@ -57,9 +57,51 @@ func insertTableFromFile(db *sql.DB, filename string, tableType table) error {
 	var queuedInserts, numTotalInserts uint
 	inserts := make([]string, *insertsPerTransaction)
 
+	var insertPreamble, insertValues string
+	switch tableType {
+	case nation:
+		insertPreamble = `INSERT INTO nation (n_nationkey, n_name, n_regionkey, n_comment) VALUES`
+		insertValues = `(%s, '%s', %s, '%s')`
+	case region:
+		insertPreamble = `INSERT INTO region (r_regionkey, r_name, r_comment) VALUES`
+		insertValues = ` (%s, '%s', '%s')`
+	case part:
+		insertPreamble = `INSERT INTO part (p_partkey, p_name, p_mfgr, p_brand, p_type,
+                                            p_size, p_container, p_retailprice, p_comment) VALUES`
+		insertValues = ` (%s, '%s', '%s', '%s', '%s', %s, '%s', %s, '%s')`
+	case supplier:
+		insertPreamble = `INSERT INTO supplier (s_suppkey, s_name, s_address, s_nationkey,
+                                                s_phone, s_acctbal, s_comment) VALUES`
+		insertValues = ` (%s, '%s', '%s', %s, '%s', %s, '%s')`
+	case partsupp:
+		insertPreamble = `INSERT INTO partsupp (ps_partkey, ps_suppkey, ps_availqty,
+                                                ps_supplycost, ps_comment) VALUES`
+		insertValues = ` (%s, %s, %s, %s, '%s')`
+	case customer:
+		insertPreamble = `INSERT INTO customer (c_custkey, c_name, c_address, c_nationkey,
+                                                c_phone, c_acctbal, c_mktsegment, c_comment) VALUES`
+		insertValues = ` (%s, '%s', '%s', %s, '%s', %s, '%s', '%s')`
+	case orders:
+		insertPreamble = `INSERT INTO orders (o_orderkey, o_custkey, o_orderstatus, o_totalprice,
+                                              o_orderdate, o_orderpriority, o_clerk,
+                                              o_shippriority, o_comment) VALUES`
+		insertValues = ` (%s, %s, '%s', %s, '%s', '%s', '%s', %s, '%s')`
+	case lineitem:
+		insertPreamble = `INSERT INTO lineitem
+                    (l_orderkey, l_partkey, l_suppkey, l_linenumber,
+                     l_quantity, l_extendedprice, l_discount, l_tax,
+                     l_returnflag, l_linestatus, l_shipdate, l_commitdate,
+                     l_receiptdate, l_shipinstruct, l_shipmode, l_comment) VALUES`
+		insertValues = ` (%s, %s, %s, %s, %s, %s, %s, %s,
+                      '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')`
+	default:
+		return errors.Errorf("Unknown table type: %d", tableType)
+
+	}
+
 	for scanner.Scan() {
 		if queuedInserts == *insertsPerTransaction {
-			if err := doInserts(db, inserts); err != nil {
+			if err := doInserts(db, insertPreamble, inserts); err != nil {
 				return err
 			}
 			numTotalInserts += queuedInserts
@@ -75,51 +117,11 @@ func insertTableFromFile(db *sql.DB, filename string, tableType table) error {
 		for i := 0; i < (len(splits) - 1); i++ {
 			fields[i] = splits[i]
 		}
-		var thisInsert string
-		switch tableType {
-		case nation:
-			thisInsert = `INSERT INTO nation (n_nationkey, n_name, n_regionkey, n_comment)
-                                      VALUES (%s, '%s', %s, '%s')`
-		case region:
-			thisInsert = `INSERT INTO region (r_regionkey, r_name, r_comment)
-                                      VALUES (%s, '%s', '%s')`
-		case part:
-			thisInsert = `INSERT INTO part (p_partkey, p_name, p_mfgr, p_brand, p_type,
-                                            p_size, p_container, p_retailprice, p_comment)
-                                      VALUES (%s, '%s', '%s', '%s', '%s', %s, '%s', %s, '%s')`
-		case supplier:
-			thisInsert = `INSERT INTO supplier (s_suppkey, s_name, s_address, s_nationkey, 
-                                                s_phone, s_acctbal, s_comment)
-                                      VALUES (%s, '%s', '%s', %s, '%s', %s, '%s')`
-		case partsupp:
-			thisInsert = `INSERT INTO partsupp (ps_partkey, ps_suppkey, ps_availqty,
-                                                ps_supplycost, ps_comment)
-                                      VALUES (%s, %s, %s, %s, '%s')`
-		case customer:
-			thisInsert = `INSERT INTO customer (c_custkey, c_name, c_address, c_nationkey,
-                                                c_phone, c_acctbal, c_mktsegment, c_comment )
-                                      VALUES (%s, '%s', '%s', %s, '%s', %s, '%s', '%s')`
-		case orders:
-			thisInsert = `INSERT INTO orders (o_orderkey, o_custkey, o_orderstatus, o_totalprice,
-                                              o_orderdate, o_orderpriority, o_clerk, 
-                                              o_shippriority, o_comment)
-                                      VALUES (%s, %s, '%s', %s, '%s', '%s', '%s', %s, '%s')`
-		case lineitem:
-			thisInsert = `INSERT INTO lineitem
-                    (l_orderkey, l_partkey, l_suppkey, l_linenumber,
-                     l_quantity, l_extendedprice, l_discount, l_tax,
-                     l_returnflag, l_linestatus, l_shipdate, l_commitdate,
-                     l_receiptdate, l_shipinstruct, l_shipmode, l_comment)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
-                      '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')`
-		default:
-			return errors.Errorf("Unknown table type: %d", tableType)
 
-		}
-		inserts[queuedInserts] = fmt.Sprintf(thisInsert, fields...)
+		inserts[queuedInserts] = fmt.Sprintf(insertValues, fields...)
 		queuedInserts++
 	}
 
 	// Do any remaining inserts
-	return doInserts(db, inserts)
+	return doInserts(db, insertPreamble, inserts)
 }
