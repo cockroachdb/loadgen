@@ -54,8 +54,8 @@ func insertTableFromFile(db *sql.DB, filename string, tableType table) error {
 	}()
 
 	scanner := bufio.NewScanner(file)
-	var queuedInserts, numTotalInserts uint
-	inserts := make([]string, *insertsPerTransaction)
+	var numTotalInserts uint
+	inserts := make([]string, 0, *insertsPerTransaction)
 
 	var insertPreamble, insertValues string
 	switch tableType {
@@ -100,16 +100,6 @@ func insertTableFromFile(db *sql.DB, filename string, tableType table) error {
 	}
 
 	for scanner.Scan() {
-		if queuedInserts == *insertsPerTransaction {
-			if err := doInserts(db, insertPreamble, inserts); err != nil {
-				return err
-			}
-			numTotalInserts += queuedInserts
-			fmt.Printf("Inserts for table %2d:     %8d\n", tableType, numTotalInserts)
-			queuedInserts = 0
-			inserts = make([]string, *insertsPerTransaction)
-		}
-
 		line := scanner.Text()
 		splits := strings.Split(line, "|")
 		fields := make([]interface{}, len(splits)-1)
@@ -118,10 +108,21 @@ func insertTableFromFile(db *sql.DB, filename string, tableType table) error {
 			fields[i] = splits[i]
 		}
 
-		inserts[queuedInserts] = fmt.Sprintf(insertValues, fields...)
-		queuedInserts++
+		inserts = append(inserts, fmt.Sprintf(insertValues, fields...))
+		numTotalInserts++
+
+		if numTotalInserts%(*insertsPerTransaction) == 0 {
+			if err := doInserts(db, insertPreamble, inserts); err != nil {
+				return err
+			}
+			fmt.Printf("Inserts for table %2d:     %8d\n", tableType, numTotalInserts)
+			inserts = inserts[:0]
+		}
 	}
 
 	// Do any remaining inserts
-	return doInserts(db, insertPreamble, inserts)
+	if len(inserts) > 0 {
+		return doInserts(db, insertPreamble, inserts)
+	}
+	return nil
 }
