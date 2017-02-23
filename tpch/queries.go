@@ -58,7 +58,8 @@ func runQuery(db *sql.DB, query int) (int, error) {
 	case 2, 4, 13, 16, 17, 18, 20, 21, 22:
 		fmt.Println("Warning: query is unsupported")
 	case 5, 6, 10, 12, 14:
-		fmt.Println("Warning: query causes Cockroach to panic (see #13692)")
+		fmt.Println("Warning: query causes Cockroach to panic (see #13692), not running query.")
+		return 0, nil
 	case 11:
 		fmt.Println("Warning: group with having not supported yet")
 	}
