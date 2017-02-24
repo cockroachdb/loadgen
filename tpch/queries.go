@@ -50,7 +50,7 @@ var queryStmts = [...]string{
 func runQuery(db *sql.DB, query int) (int, error) {
 	var queryString string
 	if *distsql {
-		queryString = "SET dist_sql = 'always'; "
+		queryString = "SET DISTSQL = 'always'; "
 	}
 	queryString = fmt.Sprintf("%s%s", queryString, queryStmts[query])
 
