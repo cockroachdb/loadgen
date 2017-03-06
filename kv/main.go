@@ -284,7 +284,7 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 		}
 	}
 
-	readStmt, err := db.Prepare(`SELECT k, v FROM test.kv WHERE k = $1 LIMIT 1`)
+	readStmt, err := db.Prepare(`SELECT k, v FROM test.kv WHERE k = $1`)
 	if err != nil {
 		return nil, err
 	}
