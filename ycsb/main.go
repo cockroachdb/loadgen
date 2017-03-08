@@ -175,28 +175,28 @@ func (yw *ycsbWorker) hashKey(key, maxValue uint64) uint64 {
 // Keys are chosen by first drawing from a Zipf distribution and hashing the
 // drawn value, so that not all hot keys are close together.
 // See YCSB paper section 5.3 for a complete description of how keys are chosen.
-func (yw *ycsbWorker) nextReadKey() (uint64, error) {
+func (yw *ycsbWorker) nextReadKey() uint64 {
 	var hashedKey uint64
-	draw := yw.zipfR.Uint64()
-	hashedKey = yw.hashKey(draw, *maxWrites)
+	key := yw.zipfR.Uint64()
+	hashedKey = yw.hashKey(key, *maxWrites)
 	if *verbose {
-		fmt.Printf("reader drew: %d -> %d\n", draw, hashedKey)
+		fmt.Printf("reader: %d -> %d\n", key, hashedKey)
 	}
-	return hashedKey, nil
+	return hashedKey
 }
 
 func (yw *ycsbWorker) nextWriteKey() uint64 {
 	key := yw.zipfR.IMaxHead()
 	hashedKey := yw.hashKey(key, *maxWrites)
 	if *verbose {
-		fmt.Printf("writer drew: fnv(%d) -> %d\n", key, hashedKey)
+		fmt.Printf("writer: fnv(%d) -> %d\n", key, hashedKey)
 	}
 	return hashedKey
 }
 
 // runLoader inserts n rows in parallel across numWorkers, with
 // row_id = i*numWorkers + thisWorkerNum for i = 0...(n-1)
-func (yw *ycsbWorker) runLoader(n int, numWorkers int, thisWorkerNum int, wg *sync.WaitGroup) {
+func (yw *ycsbWorker) runLoader(n uint64, numWorkers int, thisWorkerNum int, wg *sync.WaitGroup) {
 	defer func() {
 		if *verbose {
 			fmt.Printf("Worker %d done loading\n", yw.workerID)
@@ -206,14 +206,15 @@ func (yw *ycsbWorker) runLoader(n int, numWorkers int, thisWorkerNum int, wg *sy
 	if *verbose {
 		fmt.Printf("Worker %d loading %d rows of data\n", yw.workerID, n)
 	}
-	for i := 0; i < n; i++ {
-		key := uint64((i * numWorkers) + thisWorkerNum)
-		hashedKey := yw.hashKey(key, *maxWrites)
+	for i := uint64(thisWorkerNum + zipfIMin); i <= n; i += uint64(numWorkers) {
+		hashedKey := yw.hashKey(i, *maxWrites)
 		if err := yw.insertRow(hashedKey, false); err != nil {
 			if *verbose {
 				fmt.Printf("error loading row %d: %s\n", i, err)
 			}
 			atomic.AddUint64(&globalStats[writeErrors], 1)
+		} else if *verbose {
+			fmt.Printf("loaded %d\n", hashedKey)
 		}
 	}
 }
@@ -295,11 +296,7 @@ func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
 }
 
 func (yw *ycsbWorker) readRow() error {
-	key, err := yw.nextReadKey()
-	if err != nil {
-		atomic.AddUint64(&globalStats[readErrors], 1)
-		return err
-	}
+	key := yw.nextReadKey()
 	readString := fmt.Sprintf("SELECT * FROM ycsb.usertable WHERE ycsb_key=%d", key)
 	res, err := yw.db.Query(readString)
 	if err != nil {
@@ -471,7 +468,7 @@ func main() {
 	var wg sync.WaitGroup
 	for i := range workers {
 		wg.Add(1)
-		go workers[i].runLoader(int(*initialLoad)/len(workers), len(workers), i, &wg)
+		go workers[i].runLoader(*initialLoad, len(workers), i, &wg)
 	}
 	wg.Wait()
 	if *verbose {

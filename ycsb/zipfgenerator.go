@@ -66,8 +66,8 @@ func NewZipfGenerator(iMin, iMax uint64, theta float64, verbose bool) (*ZipfGene
 	src := rand.NewSource(seed)
 	r := rand.New(src)
 
-	if iMin >= iMax {
-		return nil, errors.Errorf("iMin %d <= iMax %d", iMin, iMax)
+	if iMin > iMax {
+		return nil, errors.Errorf("iMin %d > iMax %d", iMin, iMax)
 	}
 	if theta < 0.0 || theta == 1.0 {
 		return nil, errors.Errorf("0 < theta, and theta != 1")
