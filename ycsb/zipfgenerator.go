@@ -39,33 +39,28 @@ import (
 // Second, rand.Zipf only supports theta <= 1, we suppose all values of theta.
 type ZipfGenerator struct {
 	// The underlying RNG
-	r         *rand.Rand
-	seed      int64
 	zipfGenMu ZipfGeneratorMu
 	// supplied values
 	theta float64
 	iMin  uint64
 	// internally computed values
-	zetaN, alpha, zeta2 float64
-	verbose             bool
+	alpha, zeta2 float64
+	verbose      bool
 }
 
 // ZipfGeneratorMu holds variables which must be globally synced.
 type ZipfGeneratorMu struct {
 	mu       sync.Mutex
+	r        *rand.Rand
 	iMax     uint64
 	iMaxHead uint64
 	eta      float64
+	zetaN    float64
 }
 
 // NewZipfGenerator constructs a new ZipfGenerator with the given parameters.
 // It returns an error if the parameters are outside the accepted range.
 func NewZipfGenerator(iMin, iMax uint64, theta float64, verbose bool) (*ZipfGenerator, error) {
-	//fmt.Println("Debug: NewZipfGenerator")
-	seed := int64(time.Now().UnixNano())
-	src := rand.NewSource(seed)
-	r := rand.New(src)
-
 	if iMin > iMax {
 		return nil, errors.Errorf("iMin %d > iMax %d", iMin, iMax)
 	}
@@ -74,9 +69,9 @@ func NewZipfGenerator(iMin, iMax uint64, theta float64, verbose bool) (*ZipfGene
 	}
 
 	z := ZipfGenerator{
-		r:    r,
 		iMin: iMin,
 		zipfGenMu: ZipfGeneratorMu{
+			r:    rand.New(rand.NewSource(int64(time.Now().UnixNano()))),
 			iMax: iMax,
 		},
 		theta:   theta,
@@ -97,15 +92,14 @@ func NewZipfGenerator(iMin, iMax uint64, theta float64, verbose bool) (*ZipfGene
 	}
 	z.alpha = 1.0 / (1.0 - theta)
 	z.zipfGenMu.eta = (1 - math.Pow(2.0/float64(z.zipfGenMu.iMax+1-z.iMin), 1.0-theta)) / (1.0 - zeta2/zetaN)
+	z.zipfGenMu.zetaN = zetaN
 	z.zeta2 = zeta2
-	z.zetaN = zetaN
 	return &z, nil
 }
 
 // computeZetaIncrementally recomputes zeta(iMax, theta), assuming that
 // sum = zeta(oldIMax, theta). It returns zeta(iMax, theta), computed incrementally.
 func computeZetaIncrementally(oldIMax, iMax uint64, theta float64, sum float64) (float64, error) {
-	//fmt.Println("Debug: computeZetaIncrementally")
 	if iMax < oldIMax {
 		return 0, errors.Errorf("Can't increment iMax backwards!")
 	}
@@ -128,17 +122,18 @@ func computeZetaFromScratch(n uint64, theta float64) (float64, error) {
 // Uint64 draws a new value between iMin and iMax, with probabilities
 // according to the Zipf distribution.
 func (z *ZipfGenerator) Uint64() uint64 {
-	u := z.r.Float64()
-	uz := u * z.zetaN
-	if uz < 1.0 {
-		return z.iMin
-	} else if uz < 1.0+math.Pow(0.5, z.theta) {
-		return z.iMin + 1
-	}
-
 	z.zipfGenMu.mu.Lock()
-	spread := float64(z.zipfGenMu.iMax + 1 - z.iMin)
-	result := z.iMin + uint64(spread*math.Pow(z.zipfGenMu.eta*u-z.zipfGenMu.eta+1.0, z.alpha))
+	u := z.zipfGenMu.r.Float64()
+	uz := u * z.zipfGenMu.zetaN
+	var result uint64
+	if uz < 1.0 {
+		result = z.iMin
+	} else if uz < 1.0+math.Pow(0.5, z.theta) {
+		result = z.iMin + 1
+	} else {
+		spread := float64(z.zipfGenMu.iMax + 1 - z.iMin)
+		result = z.iMin + uint64(spread*math.Pow(z.zipfGenMu.eta*u-z.zipfGenMu.eta+1.0, z.alpha))
+	}
 	if z.verbose {
 		fmt.Printf("Uint64[%d, %d] -> %d\n", z.iMin, z.zipfGenMu.iMax, result)
 	}
@@ -150,14 +145,15 @@ func (z *ZipfGenerator) Uint64() uint64 {
 // on it. It throws an error if the recomputation failed.
 func (z *ZipfGenerator) IncrementIMax() error {
 	z.zipfGenMu.mu.Lock()
-	zetaN, err := computeZetaIncrementally(z.zipfGenMu.iMax, z.zipfGenMu.iMax+1, z.theta, z.zetaN)
+	zetaN, err := computeZetaIncrementally(
+		z.zipfGenMu.iMax, z.zipfGenMu.iMax+1, z.theta, z.zipfGenMu.zetaN)
 	if err != nil {
 		z.zipfGenMu.mu.Unlock()
 		return errors.Errorf("Could not incrementally compute zeta: %s", err)
 	}
 	eta := (1 - math.Pow(2.0/float64(z.zipfGenMu.iMax+1-z.iMin), 1.0-z.theta)) / (1.0 - z.zeta2/zetaN)
 	z.zipfGenMu.eta = eta
-	z.zetaN = zetaN
+	z.zipfGenMu.zetaN = zetaN
 	z.zipfGenMu.iMax++
 	z.zipfGenMu.mu.Unlock()
 	return nil
