@@ -77,8 +77,7 @@ var splits = flag.Int("splits", 0, "Number of splits to perform before starting 
 
 // ycsbWorker independently issues reads, writes, and scans against the database.
 type ycsbWorker struct {
-	workerID int
-	db       *sql.DB
+	db *sql.DB
 	// An RNG used to generate random keys
 	zipfR *ZipfGenerator
 	// An RNG used to generate random strings for the values
@@ -114,10 +113,7 @@ const (
 	scanOp
 )
 
-func newYcsbWorker(db *sql.DB, zipfR *ZipfGenerator, id int, workloadFlag string) *ycsbWorker {
-	if *verbose {
-		fmt.Printf("Creating YCSB Worker '%d' running Workload %s\n", id, workloadFlag)
-	}
+func newYcsbWorker(db *sql.DB, zipfR *ZipfGenerator, workloadFlag string) *ycsbWorker {
 	source := rand.NewSource(int64(time.Now().UnixNano()))
 	var readFreq, writeFreq, scanFreq float32
 
@@ -149,7 +145,6 @@ func newYcsbWorker(db *sql.DB, zipfR *ZipfGenerator, id int, workloadFlag string
 	r := rand.New(source)
 	return &ycsbWorker{
 		db:            db,
-		workerID:      id,
 		r:             r,
 		zipfR:         zipfR,
 		readFreq:      readFreq,
@@ -197,16 +192,8 @@ func (yw *ycsbWorker) nextWriteKey() uint64 {
 // runLoader inserts n rows in parallel across numWorkers, with
 // row_id = i*numWorkers + thisWorkerNum for i = 0...(n-1)
 func (yw *ycsbWorker) runLoader(n uint64, numWorkers int, thisWorkerNum int, wg *sync.WaitGroup) {
-	defer func() {
-		if *verbose {
-			fmt.Printf("Worker %d done loading\n", yw.workerID)
-		}
-		wg.Done()
-	}()
-	if *verbose {
-		fmt.Printf("Worker %d loading %d rows of data\n", yw.workerID, n)
-	}
-	for i := uint64(thisWorkerNum + zipfIMin); i <= n; i += uint64(numWorkers) {
+	defer wg.Done()
+	for i := uint64(thisWorkerNum + zipfIMin); i < n; i += uint64(numWorkers) {
 		hashedKey := yw.hashKey(i, *maxWrites)
 		if err := yw.insertRow(hashedKey, false); err != nil {
 			if *verbose {
@@ -214,7 +201,7 @@ func (yw *ycsbWorker) runLoader(n uint64, numWorkers int, thisWorkerNum int, wg 
 			}
 			atomic.AddUint64(&globalStats[writeErrors], 1)
 		} else if *verbose {
-			fmt.Printf("loaded %d\n", hashedKey)
+			fmt.Printf("loaded %d -> %d\n", i, hashedKey)
 		}
 	}
 }
@@ -222,12 +209,7 @@ func (yw *ycsbWorker) runLoader(n uint64, numWorkers int, thisWorkerNum int, wg 
 // runWorker is an infinite loop in which the ycsbWorker reads and writes
 // random data into the table in proportion to the op frequencies.
 func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
-	defer func() {
-		if *verbose {
-			fmt.Printf("Shutting down worker '%d'\n", yw.workerID)
-		}
-		wg.Done()
-	}()
+	defer wg.Done()
 
 	for {
 		tStart := time.Now()
@@ -452,7 +434,7 @@ func main() {
 
 	workers := make([]*ycsbWorker, *concurrency)
 	for i := range workers {
-		workers[i] = newYcsbWorker(db, zipfR, i, *workload)
+		workers[i] = newYcsbWorker(db, zipfR, *workload)
 	}
 
 	if *splits > 0 {
@@ -466,9 +448,12 @@ func main() {
 
 	loadStart := time.Now()
 	var wg sync.WaitGroup
-	for i := range workers {
+	// TODO(peter): Using all of the workers for loading leads to errors with
+	// some of the insert statements receiving an EOF. For now, use a single
+	// worker.
+	for i, n := 0, 1; i < n; i++ {
 		wg.Add(1)
-		go workers[i].runLoader(*initialLoad, len(workers), i, &wg)
+		go workers[i].runLoader(*initialLoad, n, i, &wg)
 	}
 	wg.Wait()
 	if *verbose {
