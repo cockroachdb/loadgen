@@ -206,7 +206,7 @@ func (yw *ycsbWorker) runLoader(n uint64, numWorkers int, thisWorkerNum int, wg 
 	if *verbose {
 		fmt.Printf("Worker %d loading %d rows of data\n", yw.workerID, n)
 	}
-	for i := uint64(thisWorkerNum + zipfIMin); i <= n; i += uint64(numWorkers) {
+	for i := uint64(thisWorkerNum + zipfIMin); i < n; i += uint64(numWorkers) {
 		hashedKey := yw.hashKey(i, *maxWrites)
 		if err := yw.insertRow(hashedKey, false); err != nil {
 			if *verbose {
