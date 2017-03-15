@@ -34,6 +34,9 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/net/context"
+	"golang.org/x/time/rate"
+
 	mgo "gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 
@@ -54,6 +57,8 @@ var batch = flag.Int("batch", 1, "Number of blocks to insert in a single SQL sta
 var splits = flag.Int("splits", 0, "Number of splits to perform before starting normal operations")
 
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
+
+var maxRate = flag.Float64("max-rate", 0, "Maximum frequency of operations (reads/writes). If 0, no limit.")
 
 // outputInterval = interval at which information is output to console.
 var outputInterval = flag.Duration("output-interval", 1*time.Second, "Interval of output")
@@ -185,11 +190,18 @@ func newBlocker(db database, seq *sequence) *blocker {
 }
 
 // run is an infinite loop in which the blocker continuously attempts to
-// write blocks of random data into a table in cockroach DB.
-func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup) {
+// read / write blocks of random data into a table in cockroach DB.
+func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limiter) {
 	defer wg.Done()
 
 	for {
+		// Limit how quickly the load generator sends requests based on --max-rate.
+		if limiter != nil {
+			if err := limiter.Wait(context.Background()); err != nil {
+				panic(err)
+			}
+		}
+
 		start := time.Now()
 		var err error
 		if b.gen.rand.Intn(100) < *readPercent {
@@ -503,6 +515,13 @@ func main() {
 		}
 	}
 
+	var limiter *rate.Limiter
+	if *maxRate > 0 {
+		// Create a limiter using maxRate specified on the command line and
+		// with allowed burst of 1 at the maximum allowed rate.
+		limiter = rate.NewLimiter(rate.Limit(*maxRate), 1)
+	}
+
 	lastNow := time.Now()
 	start := lastNow
 	var lastOps uint64
@@ -514,7 +533,7 @@ func main() {
 	for i := range writers {
 		wg.Add(1)
 		writers[i] = newBlocker(db.clone(), seq)
-		go writers[i].run(errCh, &wg)
+		go writers[i].run(errCh, &wg, limiter)
 	}
 
 	var numErr int
