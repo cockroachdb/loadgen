@@ -81,7 +81,7 @@ func runLoader(dbURL string, datafile string, t table, wg *sync.WaitGroup) {
 }
 
 func runRestore(db *sql.DB, restoreLoc string) error {
-	restoreStmt := fmt.Sprintf("RESTORE DATABASE tpch FROM '%s'", restoreLoc)
+	restoreStmt := fmt.Sprintf("RESTORE tpch.* FROM '%s'", restoreLoc)
 	_, err := db.Exec(restoreStmt)
 	return err
 }
