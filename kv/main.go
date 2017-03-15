@@ -34,6 +34,9 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/net/context"
+	"golang.org/x/time/rate"
+
 	mgo "gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 
@@ -54,6 +57,8 @@ var batch = flag.Int("batch", 1, "Number of blocks to insert in a single SQL sta
 var splits = flag.Int("splits", 0, "Number of splits to perform before starting normal operations")
 
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
+
+var maxRate = flag.Float64("max-rate", 0, "Maximum frequency of operations (reads/writes). If 0, no limit.")
 
 // outputInterval = interval at which information is output to console.
 var outputInterval = flag.Duration("output-interval", 1*time.Second, "Interval of output")
@@ -168,6 +173,7 @@ type database interface {
 type blocker struct {
 	db      database
 	gen     *generator
+	limiter *rate.Limiter
 	latency struct {
 		sync.Mutex
 		*hdrhistogram.WindowedHistogram
@@ -179,17 +185,29 @@ func newBlocker(db database, seq *sequence) *blocker {
 		db:  db,
 		gen: newGenerator(seq),
 	}
+	if *maxRate > 0 {
+		// Create a limiter using maxRate specified on the command line and
+		// with allowed burst of 10s at the maximum allowed rate.
+		b.limiter = rate.NewLimiter(rate.Limit(*maxRate), 1)
+	}
 	b.latency.WindowedHistogram = hdrhistogram.NewWindowed(1,
 		minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
 	return b
 }
 
 // run is an infinite loop in which the blocker continuously attempts to
-// write blocks of random data into a table in cockroach DB.
+// read / write blocks of random data into a table in cockroach DB.
 func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
+		// Limit how quickly the load generator sends requests based on --max-rate.
+		if b.limiter != nil {
+			if err := b.limiter.Wait(context.Background()); err != nil {
+				panic(err)
+			}
+		}
+
 		start := time.Now()
 		var err error
 		if b.gen.rand.Intn(100) < *readPercent {
