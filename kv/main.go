@@ -585,7 +585,6 @@ func main() {
 				}
 			}
 
-			p50 := h.ValueAtQuantile(50)
 			p95 := h.ValueAtQuantile(95)
 			p99 := h.ValueAtQuantile(99)
 			pMax := h.ValueAtQuantile(100)
@@ -594,15 +593,14 @@ func main() {
 			elapsed := now.Sub(lastNow)
 			ops := atomic.LoadUint64(&numOps)
 			if i%20 == 0 {
-				fmt.Println("_elapsed___errors__ops/sec(inst)___ops/sec(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+				fmt.Println("_elapsed___errors__ops/sec(inst)___ops/sec(cum)__p95(ms)__p99(ms)_pMax(ms)")
 			}
 			i++
-			fmt.Printf("%8s %8d %14.1f %14.1f %8.1f %8.1f %8.1f %8.1f\n",
+			fmt.Printf("%8s %8d %14.1f %14.1f %8.1f %8.1f %8.1f\n",
 				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
 				numErr,
 				float64(ops-lastOps)/elapsed.Seconds(),
 				float64(ops)/time.Since(start).Seconds(),
-				time.Duration(p50).Seconds()*1000,
 				time.Duration(p95).Seconds()*1000,
 				time.Duration(p99).Seconds()*1000,
 				time.Duration(pMax).Seconds()*1000)
