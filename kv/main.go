@@ -291,7 +291,7 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 		r := rand.New(rand.NewSource(int64(time.Now().UnixNano())))
 		g := newGenerator(&sequence{val: *writeSeq, seed: *seqSeed})
 		for i := 0; i < *splits; i++ {
-			if _, err := db.Exec(`ALTER TABLE test.kv SPLIT AT ($1)`, g.hash(r.Int63())); err != nil {
+			if _, err := db.Exec(`ALTER TABLE test.kv SPLIT AT VALUES ($1)`, g.hash(r.Int63())); err != nil {
 				return nil, err
 			}
 		}
