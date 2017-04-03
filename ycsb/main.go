@@ -41,6 +41,7 @@ import (
 	mgo "gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 
+	"github.com/gocql/gocql"
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
 )
@@ -80,6 +81,10 @@ var splits = flag.Int("splits", 0, "Number of splits to perform before starting 
 // Mongo flags. See https://godoc.org/gopkg.in/mgo.v2#Session.SetSafe for details.
 var mongoWMode = flag.String("mongo-wmode", "", "WMode for mongo session (eg: majority)")
 var mongoJ = flag.Bool("mongo-j", false, "Sync journal before op return")
+
+// Cassandra flags.
+var cassandraConsistency = flag.String("cassandra-consistency", "QUORUM", "Op consistency: ANY ONE TWO THREE QUORUM ALL LOCAL_QUORUM EACH_QUORUM LOCAL_ONE")
+var cassandraReplication = flag.Int("cassandra-replication", 1, "Replication factor for cassandra")
 
 type database interface {
 	readRow(key uint64) (bool, error)
@@ -466,8 +471,82 @@ func setupMongo(parsedURL *url.URL) (database, error) {
 	return &mongo{kv: kv}, nil
 }
 
+type cassandra struct {
+	session *gocql.Session
+}
+
+func (c *cassandra) readRow(key uint64) (bool, error) {
+	var k uint64
+	var fields [10]string
+	if err := c.session.Query(
+		`SELECT * FROM ycsb.usertable WHERE ycsb_key = ? LIMIT 1`,
+		key).Consistency(gocql.One).Scan(&k, &fields[0], &fields[1], &fields[2], &fields[3],
+		&fields[4], &fields[5], &fields[6], &fields[7], &fields[8], &fields[9]); err != nil {
+		if err == gocql.ErrNotFound {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+func (c *cassandra) insertRow(key uint64, fields []string) error {
+	const stmt = "INSERT INTO ycsb.usertable " +
+		"(ycsb_key, field1, field2, field3, field4, field5, field6, field7, field8, field9, field10) " +
+		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?); "
+	args := make([]interface{}, len(fields)+1)
+	args[0] = key
+	for i := 0; i < len(fields); i++ {
+		args[i+1] = fields[i]
+	}
+	return c.session.Query(stmt, args...).Exec()
+}
+
+func (c *cassandra) clone() database {
+	return c
+}
+
 func setupCassandra(parsedURL *url.URL) (database, error) {
-	return nil, fmt.Errorf("unimplemented")
+	cluster := gocql.NewCluster(parsedURL.Host)
+	cluster.Consistency = gocql.ParseConsistency(*cassandraConsistency)
+	s, err := cluster.CreateSession()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if *drop {
+		_ = s.Query(`DROP KEYSPACE ycsb`).RetryPolicy(nil).Exec()
+	}
+
+	createKeyspace := fmt.Sprintf(`
+CREATE KEYSPACE IF NOT EXISTS ycsb WITH REPLICATION = {
+  'class' : 'SimpleStrategy',
+  'replication_factor' : %d
+};`, *cassandraReplication)
+
+	const createTable = `
+CREATE TABLE IF NOT EXISTS ycsb.usertable (
+  ycsb_key BIGINT,
+	FIELD1 BLOB,
+	FIELD2 BLOB,
+	FIELD3 BLOB,
+	FIELD4 BLOB,
+	FIELD5 BLOB,
+	FIELD6 BLOB,
+	FIELD7 BLOB,
+	FIELD8 BLOB,
+	FIELD9 BLOB,
+	FIELD10 BLOB,
+  PRIMARY KEY(ycsb_key)
+);`
+
+	if err := s.Query(createKeyspace).RetryPolicy(nil).Exec(); err != nil {
+		log.Fatal(err)
+	}
+	if err := s.Query(createTable).RetryPolicy(nil).Exec(); err != nil {
+		log.Fatal(err)
+	}
+	return &cassandra{session: s}, nil
 }
 
 // setupDatabase performs initial setup for the example, creating a database
