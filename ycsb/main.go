@@ -20,6 +20,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/binary"
 	"flag"
@@ -32,13 +33,15 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	mgo "gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
+
+	"github.com/gocql/gocql"
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
 )
@@ -75,9 +78,23 @@ var maxWrites = flag.Uint64("max-writes", 7*24*3600*1500,
 
 var splits = flag.Int("splits", 0, "Number of splits to perform before starting normal operations")
 
+// Mongo flags. See https://godoc.org/gopkg.in/mgo.v2#Session.SetSafe for details.
+var mongoWMode = flag.String("mongo-wmode", "", "WMode for mongo session (eg: majority)")
+var mongoJ = flag.Bool("mongo-j", false, "Sync journal before op return")
+
+// Cassandra flags.
+var cassandraConsistency = flag.String("cassandra-consistency", "QUORUM", "Op consistency: ANY ONE TWO THREE QUORUM ALL LOCAL_QUORUM EACH_QUORUM LOCAL_ONE")
+var cassandraReplication = flag.Int("cassandra-replication", 1, "Replication factor for cassandra")
+
+type database interface {
+	readRow(key uint64) (bool, error)
+	insertRow(key uint64, fields []string) error
+	clone() database
+}
+
 // ycsbWorker independently issues reads, writes, and scans against the database.
 type ycsbWorker struct {
-	db *sql.DB
+	db database
 	// An RNG used to generate random keys
 	zipfR *ZipfGenerator
 	// An RNG used to generate random strings for the values
@@ -113,7 +130,7 @@ const (
 	scanOp
 )
 
-func newYcsbWorker(db *sql.DB, zipfR *ZipfGenerator, workloadFlag string) *ycsbWorker {
+func newYcsbWorker(db database, zipfR *ZipfGenerator, workloadFlag string) *ycsbWorker {
 	source := rand.NewSource(int64(time.Now().UnixNano()))
 	var readFreq, writeFreq, scanFreq float32
 
@@ -251,25 +268,20 @@ func (yw *ycsbWorker) randString(length int) string {
 	for i := range str {
 		str[i] = letters[yw.r.Intn(len(letters))]
 	}
-	return fmt.Sprintf("'%s'", string(str))
+	return string(str)
 }
 
 func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
-	fields := make([]string, numTableFields+1)
-	fields[0] = strconv.FormatUint(key, 10)
-	for i := 1; i < len(fields); i++ {
+	fields := make([]string, numTableFields)
+	for i := 0; i < len(fields); i++ {
 		fields[i] = yw.randString(fieldLength)
 	}
-	values := strings.Join(fields, ", ")
-	// TODO(arjun): Consider using a prepared statement here.
-	insertString := fmt.Sprintf("INSERT INTO ycsb.usertable VALUES (%s)", values)
-	_, err := yw.db.Exec(insertString)
-	if err != nil {
+	if err := yw.db.insertRow(key, fields); err != nil {
 		return err
 	}
 
 	if increment {
-		if err = yw.zipfR.IncrementIMax(); err != nil {
+		if err := yw.zipfR.IncrementIMax(); err != nil {
 			return err
 		}
 	}
@@ -278,23 +290,11 @@ func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
 }
 
 func (yw *ycsbWorker) readRow() error {
-	key := yw.nextReadKey()
-	readString := fmt.Sprintf("SELECT * FROM ycsb.usertable WHERE ycsb_key=%d", key)
-	res, err := yw.db.Query(readString)
+	empty, err := yw.db.readRow(yw.nextReadKey())
 	if err != nil {
 		return err
 	}
-	var rowsFound int
-	for res.Next() {
-		rowsFound++
-	}
-	if *verbose {
-		fmt.Printf("reader found %d rows for key %d\n", rowsFound, key)
-	}
-	if err := res.Close(); err != nil {
-		return err
-	}
-	if rowsFound > 0 {
+	if !empty {
 		atomic.AddUint64(&globalStats[nonEmptyReads], 1)
 		return nil
 	}
@@ -321,18 +321,46 @@ func (yw *ycsbWorker) chooseOp() operation {
 	return scanOp
 }
 
-// setupDatabase performs initial setup for the example, creating a database
-// with a single table. If the desired table already exists on the cluster, the
-// existing table will be dropped if the -drop flag was specified.
-func setupDatabase(dbURL string) (*sql.DB, error) {
-	if *verbose {
-		fmt.Printf("Setting up the database. Connecting to db: %s\n", dbURL)
-	}
-	parsedURL, err := url.Parse(dbURL)
-	if err != nil {
-		return nil, err
-	}
+type cockroach struct {
+	db *sql.DB
+}
 
+func (c *cockroach) readRow(key uint64) (bool, error) {
+	res, err := c.db.Query(fmt.Sprintf("SELECT * FROM ycsb.usertable WHERE ycsb_key=%d", key))
+	if err != nil {
+		return false, err
+	}
+	var rowsFound int
+	for res.Next() {
+		rowsFound++
+	}
+	if *verbose {
+		fmt.Printf("reader found %d rows for key %d\n", rowsFound, key)
+	}
+	if err := res.Close(); err != nil {
+		return false, err
+	}
+	return rowsFound == 0, nil
+}
+
+func (c *cockroach) insertRow(key uint64, fields []string) error {
+	// TODO(arjun): Consider using a prepared statement here.
+	var buf bytes.Buffer
+	buf.WriteString("INSERT INTO ycsb.usertable VALUES (")
+	fmt.Fprintf(&buf, "%d", key)
+	for _, s := range fields {
+		fmt.Fprintf(&buf, ", '%s'", s)
+	}
+	buf.WriteString(")")
+	_, err := c.db.Exec(buf.String())
+	return err
+}
+
+func (c *cockroach) clone() database {
+	return c
+}
+
+func setupCockroach(parsedURL *url.URL) (database, error) {
 	// Open connection to server and create a database.
 	db, err := sql.Open("postgres", parsedURL.String())
 	if err != nil {
@@ -366,22 +394,186 @@ func setupDatabase(dbURL string) (*sql.DB, error) {
 	createStmt := `
 CREATE TABLE IF NOT EXISTS ycsb.usertable (
 	ycsb_key INT PRIMARY KEY NOT NULL,
-	FIELD1 TEXT, 
-	FIELD2 TEXT, 
-	FIELD3 TEXT, 
-	FIELD4 TEXT, 
+	FIELD1 TEXT,
+	FIELD2 TEXT,
+	FIELD3 TEXT,
+	FIELD4 TEXT,
 	FIELD5 TEXT,
-	FIELD6 TEXT, 
-	FIELD7 TEXT, 
-	FIELD8 TEXT, 
-	FIELD9 TEXT, 
+	FIELD6 TEXT,
+	FIELD7 TEXT,
+	FIELD8 TEXT,
+	FIELD9 TEXT,
 	FIELD10 TEXT
 )`
 	if _, err := db.Exec(createStmt); err != nil {
 		return nil, err
 	}
 
-	return db, nil
+	if *splits > 0 {
+		// NB: We only need ycsbWorker.hashKey, so passing nil for the database and
+		// ZipfGenerator is ok.
+		w := newYcsbWorker(nil, nil, *workload)
+		for i := 0; i < *splits; i++ {
+			key := w.hashKey(uint64(i), *maxWrites)
+			if _, err := db.Exec(`ALTER TABLE ycsb.usertable SPLIT AT VALUES ($1)`, key); err != nil {
+				log.Fatal(err)
+			}
+		}
+	}
+
+	return &cockroach{db: db}, nil
+}
+
+type mongoBlock struct {
+	Key    int64 `bson:"_id"`
+	Fields []string
+}
+
+type mongo struct {
+	kv *mgo.Collection
+}
+
+func (m *mongo) readRow(key uint64) (bool, error) {
+	var b mongoBlock
+	if err := m.kv.Find(bson.M{"_id": key}).One(&b); err != nil {
+		if err == mgo.ErrNotFound {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+func (m *mongo) insertRow(key uint64, fields []string) error {
+	return m.kv.Insert(&mongoBlock{
+		Key:    int64(key),
+		Fields: fields,
+	})
+}
+
+func (m *mongo) clone() database {
+	return &mongo{
+		// NB: Whoa!
+		kv: m.kv.Database.Session.Copy().DB(m.kv.Database.Name).C(m.kv.Name),
+	}
+}
+
+func setupMongo(parsedURL *url.URL) (database, error) {
+	session, err := mgo.Dial(parsedURL.String())
+	if err != nil {
+		panic(err)
+	}
+
+	session.SetMode(mgo.Monotonic, true)
+	session.SetSafe(&mgo.Safe{WMode: *mongoWMode, J: *mongoJ})
+
+	kv := session.DB("ycsb").C("kv")
+	if *drop {
+		// Intentionally ignore the error as we can't tell if the collection
+		// doesn't exist.
+		_ = kv.DropCollection()
+	}
+	return &mongo{kv: kv}, nil
+}
+
+type cassandra struct {
+	session *gocql.Session
+}
+
+func (c *cassandra) readRow(key uint64) (bool, error) {
+	var k uint64
+	var fields [10]string
+	if err := c.session.Query(
+		`SELECT * FROM ycsb.usertable WHERE ycsb_key = ? LIMIT 1`,
+		key).Consistency(gocql.One).Scan(&k, &fields[0], &fields[1], &fields[2], &fields[3],
+		&fields[4], &fields[5], &fields[6], &fields[7], &fields[8], &fields[9]); err != nil {
+		if err == gocql.ErrNotFound {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+func (c *cassandra) insertRow(key uint64, fields []string) error {
+	const stmt = "INSERT INTO ycsb.usertable " +
+		"(ycsb_key, field1, field2, field3, field4, field5, field6, field7, field8, field9, field10) " +
+		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?); "
+	args := make([]interface{}, len(fields)+1)
+	args[0] = key
+	for i := 0; i < len(fields); i++ {
+		args[i+1] = fields[i]
+	}
+	return c.session.Query(stmt, args...).Exec()
+}
+
+func (c *cassandra) clone() database {
+	return c
+}
+
+func setupCassandra(parsedURL *url.URL) (database, error) {
+	cluster := gocql.NewCluster(parsedURL.Host)
+	cluster.Consistency = gocql.ParseConsistency(*cassandraConsistency)
+	s, err := cluster.CreateSession()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if *drop {
+		_ = s.Query(`DROP KEYSPACE ycsb`).RetryPolicy(nil).Exec()
+	}
+
+	createKeyspace := fmt.Sprintf(`
+CREATE KEYSPACE IF NOT EXISTS ycsb WITH REPLICATION = {
+  'class' : 'SimpleStrategy',
+  'replication_factor' : %d
+};`, *cassandraReplication)
+
+	const createTable = `
+CREATE TABLE IF NOT EXISTS ycsb.usertable (
+  ycsb_key BIGINT,
+	FIELD1 BLOB,
+	FIELD2 BLOB,
+	FIELD3 BLOB,
+	FIELD4 BLOB,
+	FIELD5 BLOB,
+	FIELD6 BLOB,
+	FIELD7 BLOB,
+	FIELD8 BLOB,
+	FIELD9 BLOB,
+	FIELD10 BLOB,
+  PRIMARY KEY(ycsb_key)
+);`
+
+	if err := s.Query(createKeyspace).RetryPolicy(nil).Exec(); err != nil {
+		log.Fatal(err)
+	}
+	if err := s.Query(createTable).RetryPolicy(nil).Exec(); err != nil {
+		log.Fatal(err)
+	}
+	return &cassandra{session: s}, nil
+}
+
+// setupDatabase performs initial setup for the example, creating a database
+// with a single table. If the desired table already exists on the cluster, the
+// existing table will be dropped if the -drop flag was specified.
+func setupDatabase(dbURL string) (database, error) {
+	parsedURL, err := url.Parse(dbURL)
+	if err != nil {
+		return nil, err
+	}
+	parsedURL.Path = "ycsb"
+
+	switch parsedURL.Scheme {
+	case "postgres", "postgresql":
+		return setupCockroach(parsedURL)
+	case "mongodb":
+		return setupMongo(parsedURL)
+	case "cassandra":
+		return setupCassandra(parsedURL)
+	default:
+		return nil, fmt.Errorf("unsupported database: %s", parsedURL.Scheme)
+	}
 }
 
 var usage = func() {
@@ -434,16 +626,7 @@ func main() {
 
 	workers := make([]*ycsbWorker, *concurrency)
 	for i := range workers {
-		workers[i] = newYcsbWorker(db, zipfR, *workload)
-	}
-
-	if *splits > 0 {
-		for i := 0; i < *splits; i++ {
-			key := workers[0].hashKey(uint64(i), *maxWrites)
-			if _, err := db.Exec(`ALTER TABLE ycsb.usertable SPLIT AT VALUES ($1)`, key); err != nil {
-				log.Fatal(err)
-			}
-		}
+		workers[i] = newYcsbWorker(db.clone(), zipfR, *workload)
 	}
 
 	loadStart := time.Now()
