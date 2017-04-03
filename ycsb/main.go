@@ -32,7 +32,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,9 +74,15 @@ var maxWrites = flag.Uint64("max-writes", 7*24*3600*1500,
 
 var splits = flag.Int("splits", 0, "Number of splits to perform before starting normal operations")
 
+type database interface {
+	readRow(key uint64) (bool, error)
+	insertRow(key uint64, fields []string) error
+	clone() database
+}
+
 // ycsbWorker independently issues reads, writes, and scans against the database.
 type ycsbWorker struct {
-	db *sql.DB
+	db database
 	// An RNG used to generate random keys
 	zipfR *ZipfGenerator
 	// An RNG used to generate random strings for the values
@@ -113,7 +118,7 @@ const (
 	scanOp
 )
 
-func newYcsbWorker(db *sql.DB, zipfR *ZipfGenerator, workloadFlag string) *ycsbWorker {
+func newYcsbWorker(db database, zipfR *ZipfGenerator, workloadFlag string) *ycsbWorker {
 	source := rand.NewSource(int64(time.Now().UnixNano()))
 	var readFreq, writeFreq, scanFreq float32
 
@@ -255,21 +260,16 @@ func (yw *ycsbWorker) randString(length int) string {
 }
 
 func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
-	fields := make([]string, numTableFields+1)
-	fields[0] = strconv.FormatUint(key, 10)
-	for i := 1; i < len(fields); i++ {
+	fields := make([]string, numTableFields)
+	for i := 0; i < len(fields); i++ {
 		fields[i] = yw.randString(fieldLength)
 	}
-	values := strings.Join(fields, ", ")
-	// TODO(arjun): Consider using a prepared statement here.
-	insertString := fmt.Sprintf("INSERT INTO ycsb.usertable VALUES (%s)", values)
-	_, err := yw.db.Exec(insertString)
-	if err != nil {
+	if err := yw.db.insertRow(key, fields); err != nil {
 		return err
 	}
 
 	if increment {
-		if err = yw.zipfR.IncrementIMax(); err != nil {
+		if err := yw.zipfR.IncrementIMax(); err != nil {
 			return err
 		}
 	}
@@ -278,23 +278,11 @@ func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
 }
 
 func (yw *ycsbWorker) readRow() error {
-	key := yw.nextReadKey()
-	readString := fmt.Sprintf("SELECT * FROM ycsb.usertable WHERE ycsb_key=%d", key)
-	res, err := yw.db.Query(readString)
+	empty, err := yw.db.readRow(yw.nextReadKey())
 	if err != nil {
 		return err
 	}
-	var rowsFound int
-	for res.Next() {
-		rowsFound++
-	}
-	if *verbose {
-		fmt.Printf("reader found %d rows for key %d\n", rowsFound, key)
-	}
-	if err := res.Close(); err != nil {
-		return err
-	}
-	if rowsFound > 0 {
+	if !empty {
 		atomic.AddUint64(&globalStats[nonEmptyReads], 1)
 		return nil
 	}
@@ -321,18 +309,41 @@ func (yw *ycsbWorker) chooseOp() operation {
 	return scanOp
 }
 
-// setupDatabase performs initial setup for the example, creating a database
-// with a single table. If the desired table already exists on the cluster, the
-// existing table will be dropped if the -drop flag was specified.
-func setupDatabase(dbURL string) (*sql.DB, error) {
-	if *verbose {
-		fmt.Printf("Setting up the database. Connecting to db: %s\n", dbURL)
-	}
-	parsedURL, err := url.Parse(dbURL)
-	if err != nil {
-		return nil, err
-	}
+type cockroach struct {
+	db *sql.DB
+}
 
+func (c *cockroach) readRow(key uint64) (bool, error) {
+	res, err := c.db.Query(fmt.Sprintf("SELECT * FROM ycsb.usertable WHERE ycsb_key=%d", key))
+	if err != nil {
+		return false, err
+	}
+	var rowsFound int
+	for res.Next() {
+		rowsFound++
+	}
+	if *verbose {
+		fmt.Printf("reader found %d rows for key %d\n", rowsFound, key)
+	}
+	if err := res.Close(); err != nil {
+		return false, err
+	}
+	return rowsFound == 0, nil
+}
+
+func (c *cockroach) insertRow(key uint64, fields []string) error {
+	// TODO(arjun): Consider using a prepared statement here.
+	stmt := fmt.Sprintf("INSERT INTO ycsb.usertable VALUES (%d, %s)",
+		key, strings.Join(fields, ", "))
+	_, err := c.db.Exec(stmt)
+	return err
+}
+
+func (c *cockroach) clone() database {
+	return c
+}
+
+func setupCockroach(parsedURL *url.URL) (database, error) {
 	// Open connection to server and create a database.
 	db, err := sql.Open("postgres", parsedURL.String())
 	if err != nil {
@@ -366,22 +377,64 @@ func setupDatabase(dbURL string) (*sql.DB, error) {
 	createStmt := `
 CREATE TABLE IF NOT EXISTS ycsb.usertable (
 	ycsb_key INT PRIMARY KEY NOT NULL,
-	FIELD1 TEXT, 
-	FIELD2 TEXT, 
-	FIELD3 TEXT, 
-	FIELD4 TEXT, 
+	FIELD1 TEXT,
+	FIELD2 TEXT,
+	FIELD3 TEXT,
+	FIELD4 TEXT,
 	FIELD5 TEXT,
-	FIELD6 TEXT, 
-	FIELD7 TEXT, 
-	FIELD8 TEXT, 
-	FIELD9 TEXT, 
+	FIELD6 TEXT,
+	FIELD7 TEXT,
+	FIELD8 TEXT,
+	FIELD9 TEXT,
 	FIELD10 TEXT
 )`
 	if _, err := db.Exec(createStmt); err != nil {
 		return nil, err
 	}
 
-	return db, nil
+	if *splits > 0 {
+		// NB: We only need ycsbWorker.hashKey, so passing nil for the database and
+		// ZipfGenerator is ok.
+		w := newYcsbWorker(nil, nil, *workload)
+		for i := 0; i < *splits; i++ {
+			key := w.hashKey(uint64(i), *maxWrites)
+			if _, err := db.Exec(`ALTER TABLE ycsb.usertable SPLIT AT VALUES ($1)`, key); err != nil {
+				log.Fatal(err)
+			}
+		}
+	}
+
+	return &cockroach{db: db}, nil
+}
+
+func setupMongo(parsedURL *url.URL) (database, error) {
+	return nil, fmt.Errorf("unimplemented")
+}
+
+func setupCassandra(parsedURL *url.URL) (database, error) {
+	return nil, fmt.Errorf("unimplemented")
+}
+
+// setupDatabase performs initial setup for the example, creating a database
+// with a single table. If the desired table already exists on the cluster, the
+// existing table will be dropped if the -drop flag was specified.
+func setupDatabase(dbURL string) (database, error) {
+	parsedURL, err := url.Parse(dbURL)
+	if err != nil {
+		return nil, err
+	}
+	parsedURL.Path = "ycsb"
+
+	switch parsedURL.Scheme {
+	case "postgres", "postgresql":
+		return setupCockroach(parsedURL)
+	case "mongodb":
+		return setupMongo(parsedURL)
+	case "cassandra":
+		return setupCassandra(parsedURL)
+	default:
+		return nil, fmt.Errorf("unsupported database: %s", parsedURL.Scheme)
+	}
 }
 
 var usage = func() {
@@ -435,15 +488,6 @@ func main() {
 	workers := make([]*ycsbWorker, *concurrency)
 	for i := range workers {
 		workers[i] = newYcsbWorker(db, zipfR, *workload)
-	}
-
-	if *splits > 0 {
-		for i := 0; i < *splits; i++ {
-			key := workers[0].hashKey(uint64(i), *maxWrites)
-			if _, err := db.Exec(`ALTER TABLE ycsb.usertable SPLIT AT VALUES ($1)`, key); err != nil {
-				log.Fatal(err)
-			}
-		}
 	}
 
 	loadStart := time.Now()
