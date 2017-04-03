@@ -38,6 +38,9 @@ import (
 	"syscall"
 	"time"
 
+	mgo "gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
+
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
 )
@@ -73,6 +76,10 @@ var maxWrites = flag.Uint64("max-writes", 7*24*3600*1500,
 	"Maximum number of writes to perform before halting. This is required for accurately generating keys that are uniformly distributed across the keyspace.")
 
 var splits = flag.Int("splits", 0, "Number of splits to perform before starting normal operations")
+
+// Mongo flags. See https://godoc.org/gopkg.in/mgo.v2#Session.SetSafe for details.
+var mongoWMode = flag.String("mongo-wmode", "", "WMode for mongo session (eg: majority)")
+var mongoJ = flag.Bool("mongo-j", false, "Sync journal before op return")
 
 type database interface {
 	readRow(key uint64) (bool, error)
@@ -407,8 +414,56 @@ CREATE TABLE IF NOT EXISTS ycsb.usertable (
 	return &cockroach{db: db}, nil
 }
 
+type mongoBlock struct {
+	Key    int64 `bson:"_id"`
+	Fields []string
+}
+
+type mongo struct {
+	kv *mgo.Collection
+}
+
+func (m *mongo) readRow(key uint64) (bool, error) {
+	var b mongoBlock
+	if err := m.kv.Find(bson.M{"_id": key}).One(&b); err != nil {
+		if err == mgo.ErrNotFound {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+func (m *mongo) insertRow(key uint64, fields []string) error {
+	return m.kv.Insert(&mongoBlock{
+		Key:    int64(key),
+		Fields: fields,
+	})
+}
+
+func (m *mongo) clone() database {
+	return &mongo{
+		// NB: Whoa!
+		kv: m.kv.Database.Session.Copy().DB(m.kv.Database.Name).C(m.kv.Name),
+	}
+}
+
 func setupMongo(parsedURL *url.URL) (database, error) {
-	return nil, fmt.Errorf("unimplemented")
+	session, err := mgo.Dial(parsedURL.String())
+	if err != nil {
+		panic(err)
+	}
+
+	session.SetMode(mgo.Monotonic, true)
+	session.SetSafe(&mgo.Safe{WMode: *mongoWMode, J: *mongoJ})
+
+	kv := session.DB("ycsb").C("kv")
+	if *drop {
+		// Intentionally ignore the error as we can't tell if the collection
+		// doesn't exist.
+		_ = kv.DropCollection()
+	}
+	return &mongo{kv: kv}, nil
 }
 
 func setupCassandra(parsedURL *url.URL) (database, error) {
@@ -487,7 +542,7 @@ func main() {
 
 	workers := make([]*ycsbWorker, *concurrency)
 	for i := range workers {
-		workers[i] = newYcsbWorker(db, zipfR, *workload)
+		workers[i] = newYcsbWorker(db.clone(), zipfR, *workload)
 	}
 
 	loadStart := time.Now()
