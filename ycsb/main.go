@@ -20,6 +20,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/binary"
 	"flag"
@@ -32,7 +33,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -268,7 +268,7 @@ func (yw *ycsbWorker) randString(length int) string {
 	for i := range str {
 		str[i] = letters[yw.r.Intn(len(letters))]
 	}
-	return fmt.Sprintf("'%s'", string(str))
+	return string(str)
 }
 
 func (yw *ycsbWorker) insertRow(key uint64, increment bool) error {
@@ -345,9 +345,14 @@ func (c *cockroach) readRow(key uint64) (bool, error) {
 
 func (c *cockroach) insertRow(key uint64, fields []string) error {
 	// TODO(arjun): Consider using a prepared statement here.
-	stmt := fmt.Sprintf("INSERT INTO ycsb.usertable VALUES (%d, %s)",
-		key, strings.Join(fields, ", "))
-	_, err := c.db.Exec(stmt)
+	var buf bytes.Buffer
+	buf.WriteString("INSERT INTO ycsb.usertable VALUES (")
+	fmt.Fprintf(&buf, "%d", key)
+	for _, s := range fields {
+		fmt.Fprintf(&buf, ", '%s'", s)
+	}
+	buf.WriteString(")")
+	_, err := c.db.Exec(buf.String())
 	return err
 }
 
