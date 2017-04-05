@@ -29,17 +29,16 @@ import (
 	"net/url"
 	"os"
 	"runtime"
-	"strings"
-	"sync"
-	"time"
-
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/cockroachdb/cockroach-go/crdb"
 	_ "github.com/lib/pq"
+	"github.com/pkg/errors"
 )
 
-var concurrency = flag.Int("load-concurrency", 2*runtime.NumCPU(),
+var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(),
 	"Number of concurrent loaders populating the initial tables.")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
 var drop = flag.Bool("drop", false,
@@ -55,29 +54,27 @@ var scaleFactor = flag.Uint("scale-factor", 1, "The Scale Factor for the TPC-H b
 var insertsPerTransaction = flag.Uint("inserts-per-tx", 100, "Number of inserts to batch into a single transaction when loading data")
 var queries = flag.String("queries", "1,3,7,8,9,19", "Queries to run. Use a comma separated list of query numbers. Default: (1,3,7,8,9,19)")
 
-func runLoader(dbURL string, datafile string, t table, wg *sync.WaitGroup) {
-	defer func() {
-		if *verbose {
-			fmt.Printf("Worker done loading from file '%s'\n", datafile)
-		}
-		wg.Done()
-	}()
+// Flags for testing this load generator.
+var insertLimit = flag.Uint("insert-limit", 0, "Limit number of rows to be inserted from each file "+
+	"(0 = unlimited")
 
+func loadFile(dbURL string, datafile string, t table) error {
 	parsedURL, err := url.Parse(dbURL)
 	if err != nil {
-		fmt.Printf("Error encountered in parsing DB URL: %s\n", err)
+		return errors.Wrap(err, "error parsing DB URL")
 	}
 
 	// Open connection to server
 	db, err := sql.Open("postgres", parsedURL.String())
 	if err != nil {
-		fmt.Printf("Error encountered in connecting to database: %s\n", err)
+		return errors.Wrap(err, "database connection error")
 	}
 
 	filename := fmt.Sprintf("%s/%s", "data", datafile)
 	if err := insertTableFromFile(db, filename, t); err != nil {
-		fmt.Printf("Error encountered in table insertion: %s\n", err)
+		return errors.Wrap(err, "table insertion error")
 	}
+	return nil
 }
 
 func runRestore(db *sql.DB, restoreLoc string) error {
@@ -167,16 +164,20 @@ func main() {
 		}
 
 		loadStart := time.Now()
-		var wg sync.WaitGroup
 		for _, file := range files {
-			wg.Add(1)
 			t, err := resolveTableTypeFromFileName(file.Name())
 			if err != nil {
 				log.Fatal(err)
 			}
-			runLoader(dbURL, file.Name(), t, &wg)
+			if err := loadFile(dbURL, file.Name(), t); err != nil {
+				log.Fatal(err)
+			}
 		}
-		wg.Wait()
+
+		if err := createIndexes(db); err != nil {
+			log.Fatal("failed to create indexes: ", err)
+		}
+
 		if *verbose {
 			fmt.Printf("Loading complete, total time elapsed: %s\n",
 				time.Since(loadStart))
