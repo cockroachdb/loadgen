@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/cockroach-go/crdb"
 	"github.com/pkg/errors"
@@ -99,6 +100,7 @@ func insertTableFromFile(db *sql.DB, filename string, tableType table) error {
 
 	}
 
+	start := time.Now()
 	for scanner.Scan() {
 		line := scanner.Text()
 		splits := strings.Split(line, "|")
@@ -110,12 +112,17 @@ func insertTableFromFile(db *sql.DB, filename string, tableType table) error {
 
 		inserts = append(inserts, fmt.Sprintf(insertValues, fields...))
 		numTotalInserts++
+		if *insertLimit == numTotalInserts {
+			break
+		}
 
 		if numTotalInserts%(*insertsPerTransaction) == 0 {
 			if err := doInserts(db, insertPreamble, inserts); err != nil {
 				return err
 			}
-			fmt.Printf("Inserts for table %2d:     %8d\n", tableType, numTotalInserts)
+			insertsPerSec := float64(numTotalInserts) / time.Now().Sub(start).Seconds()
+			fmt.Printf("Inserts for table %s:     %8d (%.3f inserts/sec)\n",
+				tableNames[tableType], numTotalInserts, insertsPerSec)
 			inserts = inserts[:0]
 		}
 	}

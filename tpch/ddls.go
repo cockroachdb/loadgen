@@ -21,6 +21,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/cockroach-go/crdb"
 	"github.com/pkg/errors"
@@ -40,22 +41,30 @@ const (
 	numTables
 )
 
+var tableNames = [...]string{
+	nation:   "nation",
+	region:   "region",
+	part:     "part",
+	supplier: "supplier",
+	partsupp: "partsupp",
+	customer: "customer",
+	orders:   "orders",
+	lineitem: "lineitem",
+}
+
 var createStmts = [...]string{
 	nation: `
     CREATE TABLE nation  (
       n_nationkey       INTEGER NOT NULL,
       n_name            CHAR(25) NOT NULL,
       n_regionkey       INTEGER NOT NULL,
-      n_comment         VARCHAR(152),
-      INDEX n_rk        (n_regionkey ASC),
-      UNIQUE INDEX n_nk (n_nationkey ASC)
-    )`,
+      n_comment         VARCHAR(152)
+		);`,
 	region: `
     CREATE TABLE region  (
       r_regionkey       INTEGER NOT NULL,
       r_name            CHAR(25) NOT NULL,
-      r_comment         VARCHAR(152),
-	  UNIQUE INDEX r_rk (r_regionkey ASC)
+      r_comment         VARCHAR(152)
     )`,
 	part: `
     CREATE TABLE part  (
@@ -67,8 +76,7 @@ var createStmts = [...]string{
       p_size            INTEGER NOT NULL,
       p_container       CHAR(10) NOT NULL,
       p_retailprice     DECIMAL(15,2) NOT NULL,
-      p_comment         VARCHAR(23) NOT NULL,
-	  UNIQUE INDEX p_pk (p_partkey ASC)
+      p_comment         VARCHAR(23) NOT NULL
     )`,
 	supplier: `
     CREATE TABLE supplier (
@@ -78,9 +86,7 @@ var createStmts = [...]string{
       s_nationkey       INTEGER NOT NULL,
       s_phone           CHAR(15) NOT NULL,
       s_acctbal         DECIMAL(15,2) NOT NULL,
-      s_comment         VARCHAR(101) NOT NULL,
-	  UNIQUE INDEX s_sk (s_suppkey ASC),
-	  INDEX s_nk        (s_nationkey ASC)
+      s_comment         VARCHAR(101) NOT NULL
     )`,
 	partsupp: `
     CREATE TABLE partsupp (
@@ -88,11 +94,7 @@ var createStmts = [...]string{
       ps_suppkey            INTEGER NOT NULL,
       ps_availqty           INTEGER NOT NULL,
       ps_supplycost         DECIMAL(15,2) NOT NULL,
-      ps_comment            VARCHAR(199) NOT NULL,
-      INDEX ps_pk           (ps_partkey ASC),
-      INDEX ps_sk           (ps_suppkey ASC),
-      UNIQUE INDEX ps_pk_sk (ps_partkey ASC, ps_suppkey ASC),
-      UNIQUE INDEX ps_sk_pk (ps_suppkey ASC, ps_partkey ASC)
+      ps_comment            VARCHAR(199) NOT NULL
     )`,
 	customer: `
 	CREATE TABLE customer (
@@ -103,9 +105,7 @@ var createStmts = [...]string{
       c_phone           CHAR(15) NOT NULL,
       c_acctbal         DECIMAL(15,2)   NOT NULL,
       c_mktsegment      CHAR(10) NOT NULL,
-      c_comment         VARCHAR(117) NOT NULL,
-	  UNIQUE INDEX c_ck (c_custkey ASC),
-	  INDEX c_nk        (c_nationkey ASC)
+      c_comment         VARCHAR(117) NOT NULL
     )`,
 	orders: `
     CREATE TABLE orders  (
@@ -117,10 +117,7 @@ var createStmts = [...]string{
       o_orderpriority      CHAR(15) NOT NULL,
       o_clerk              CHAR(15) NOT NULL,
       o_shippriority       INTEGER NOT NULL,
-      o_comment            VARCHAR(79) NOT NULL,
-      UNIQUE INDEX o_ok    (o_orderkey ASC),
-      INDEX o_ck           (o_custkey ASC),
-      INDEX o_od           (o_orderdate ASC)
+      o_comment            VARCHAR(79) NOT NULL
     )`,
 	lineitem: `
     CREATE TABLE lineitem (
@@ -139,15 +136,7 @@ var createStmts = [...]string{
       l_receiptdate   DATE NOT NULL,
       l_shipinstruct  CHAR(25) NOT NULL,
       l_shipmode      CHAR(10) NOT NULL,
-      l_comment       VARCHAR(44) NOT NULL,
-      INDEX l_ok      (l_orderkey ASC),
-      INDEX l_pk      (l_partkey ASC),
-      INDEX l_sk      (l_suppkey ASC),
-      INDEX l_sd      (l_shipdate ASC),
-      INDEX l_cd      (l_commitdate ASC),
-      INDEX l_rd      (l_receiptdate ASC),
-      INDEX l_pk_sk   (l_partkey ASC, l_suppkey ASC),
-      INDEX l_sk_pk   (l_suppkey ASC, l_partkey ASC)
+      l_comment       VARCHAR(44) NOT NULL
     )`,
 }
 
@@ -160,6 +149,38 @@ var dropStmts = [...]string{
 	"DROP TABLE IF EXISTS orders CASCADE",
 	"DROP TABLE IF EXISTS customer CASCADE",
 	"DROP TABLE IF EXISTS lineitem CASCADE",
+}
+
+var createIndexStmts = [...]string{
+	// nation
+	`CREATE INDEX        n_rk ON nation (n_regionkey ASC)`,
+	`CREATE UNIQUE INDEX n_nk ON nation (n_nationkey ASC)`,
+	// region
+	`CREATE UNIQUE INDEX r_rk ON region (r_regionkey ASC)`,
+	// part
+	`CREATE UNIQUE INDEX p_pk ON part (p_partkey ASC)`,
+	// supplier
+	`CREATE UNIQUE INDEX s_sk ON supplier (s_suppkey ASC)`,
+	`CREATE INDEX        s_nk ON supplier (s_nationkey ASC)`,
+	// partsupp
+	`CREATE UNIQUE INDEX ps_pk_sk ON partsupp (ps_partkey ASC, ps_suppkey ASC)`,
+	`CREATE UNIQUE INDEX ps_sk_pk ON partsupp (ps_suppkey ASC, ps_partkey ASC)`,
+	// customer
+	`CREATE UNIQUE INDEX c_ck ON customer (c_custkey ASC)`,
+	`CREATE INDEX c_nk ON customer (c_nationkey ASC)`,
+	// orders
+	`CREATE UNIQUE INDEX o_ok ON orders (o_orderkey ASC)`,
+	`CREATE INDEX        o_ck ON orders (o_custkey ASC)`,
+	`CREATE INDEX        o_od ON orders (o_orderdate ASC)`,
+	// lineitem
+	`CREATE INDEX l_ok    ON lineitem (l_orderkey ASC)`,
+	`CREATE INDEX l_pk    ON lineitem (l_partkey ASC)`,
+	`CREATE INDEX l_sk    ON lineitem (l_suppkey ASC)`,
+	`CREATE INDEX l_sd    ON lineitem (l_shipdate ASC)`,
+	`CREATE INDEX l_cd    ON lineitem (l_commitdate ASC)`,
+	`CREATE INDEX l_rd    ON lineitem (l_receiptdate ASC)`,
+	`CREATE INDEX l_pk_sk ON lineitem (l_partkey ASC, l_suppkey ASC)`,
+	`CREATE INDEX l_sk_pk ON lineitem (l_suppkey ASC, l_partkey ASC)`,
 }
 
 func resolveTableTypeFromFileName(filename string) (table, error) {
@@ -186,13 +207,15 @@ func resolveTableTypeFromFileName(filename string) (table, error) {
 }
 
 func createTables(db *sql.DB) error {
-
 	if *verbose {
 		fmt.Println("Dropping any existing tables")
 	}
 
 	if *drop {
 		for _, dropStmt := range dropStmts {
+			if *verbose {
+				fmt.Println("executing: ", dropStmt)
+			}
 			err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
 				_, inErr := db.Exec(dropStmt)
 				return inErr
@@ -211,6 +234,9 @@ func createTables(db *sql.DB) error {
 		fmt.Println("Finished dropping tables. Creating tables")
 	}
 	for _, createStmt := range createStmts {
+		if *verbose {
+			fmt.Println("executing: ", createStmt)
+		}
 		err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
 			_, inErr := db.Exec(createStmt)
 			return inErr
@@ -225,6 +251,31 @@ func createTables(db *sql.DB) error {
 	}
 	if *verbose {
 		fmt.Println("Finished creating tables. Creating indexes")
+	}
+
+	return nil
+}
+
+func createIndexes(db *sql.DB) error {
+	if *verbose {
+		fmt.Println("Creating indexes")
+	}
+
+	for _, stmt := range createIndexStmts {
+		start := time.Now()
+		if *verbose {
+			fmt.Println("executing: ", stmt)
+		}
+		err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
+			_, execErr := db.Exec(stmt)
+			return execErr
+		})
+		if err != nil {
+			return err
+		}
+		if *verbose {
+			fmt.Printf("finished in %.2f s\n", time.Now().Sub(start).Seconds())
+		}
 	}
 
 	return nil
