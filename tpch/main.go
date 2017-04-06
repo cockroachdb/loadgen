@@ -28,18 +28,17 @@ import (
 	"log"
 	"net/url"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cockroach-go/crdb"
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
+	"sync"
 )
 
-var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(),
-	"Number of concurrent loaders populating the initial tables.")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
 var drop = flag.Bool("drop", false,
 	"Drop the existing table and recreate it to start from scratch")
@@ -53,6 +52,9 @@ var distsql = flag.Bool("dist-sql", true, "Use DistSQL for query execution (defa
 var scaleFactor = flag.Uint("scale-factor", 1, "The Scale Factor for the TPC-H benchmark")
 var insertsPerTransaction = flag.Uint("inserts-per-tx", 100, "Number of inserts to batch into a single transaction when loading data")
 var queries = flag.String("queries", "1,3,7,8,9,19", "Queries to run. Use a comma separated list of query numbers. Default: (1,3,7,8,9,19)")
+var loops = flag.Uint("loops", 1, "Number of times to run the queries (0 = run forever).")
+var concurrency = flag.Uint("concurrency", 1, "Number of queries to execute concurrently.")
+var maxErrors = flag.Uint64("max-errors", 0, "Number of query errors allowed before aborting.")
 
 // Flags for testing this load generator.
 var insertLimit = flag.Uint("insert-limit", 0, "Limit number of rows to be inserted from each file "+
@@ -88,7 +90,7 @@ func runRestore(db *sql.DB, restoreLoc string) error {
 // existing table will be dropped if the -drop flag was specified.
 func setupDatabase(dbURL string) (*sql.DB, error) {
 	if *verbose {
-		fmt.Printf("Setting up the database. Connecting to db: %s\n", dbURL)
+		log.Printf("connecting to db: %s\n", dbURL)
 	}
 	parsedURL, err := url.Parse(dbURL)
 	if err != nil {
@@ -110,6 +112,35 @@ var usage = func() {
 	flag.PrintDefaults()
 }
 
+// loopQueries runs the given list of queries *loops times. id is used for
+// logging. Query errors are atomically added to errorCount, resulting in a
+// fatal error if we have more than *maxErrors errors.
+func loopQueries(id uint, db *sql.DB, queries []int, wg *sync.WaitGroup, errorCount *uint64) {
+	for i := uint(0); i < *loops || *loops == 0; i++ {
+		for _, query := range queries {
+			if *verbose {
+				log.Printf("[%d] running query %d", id, query)
+			}
+			start := time.Now()
+			numRows, err := runQuery(db, query)
+			elapsed := time.Now().Sub(start)
+			if err != nil {
+				newErrorCount := atomic.AddUint64(errorCount, 1)
+				wrappedErr := errors.Wrapf(err, "[%d] error running query %d", id, query)
+				if newErrorCount <= *maxErrors {
+					log.Print(wrappedErr)
+				} else {
+					log.Fatal(wrappedErr)
+				}
+				return
+			}
+			log.Printf("[%d] finished query %d: %d rows returned after %4.2f seconds\n",
+				id, query, numRows, elapsed.Seconds())
+		}
+	}
+	wg.Done()
+}
+
 func main() {
 	flag.Usage = usage
 	flag.Parse()
@@ -129,7 +160,7 @@ func main() {
 	}
 
 	if (*restore != "") && *load {
-		log.Fatal("Only one of -load or -restore must be specified.")
+		log.Fatal("only one of -load or -restore must be specified.")
 	}
 
 	// Ensure the database exists
@@ -138,29 +169,28 @@ func main() {
 		return inErr
 	}); err != nil {
 		if *verbose {
-			log.Fatalf("Failed to create the %s\n",
-				err)
+			log.Fatalf("failed to create database: %s\n", err)
 		}
 	}
 
 	if *restore != "" {
 		if err = runRestore(db, *restore); err != nil {
-			log.Fatalf("Restore failed: %s", err)
+			log.Fatalf("restore failed: %s", err)
 		}
 	}
 
 	if *load {
 		if err = createTables(db); err != nil {
-			fmt.Printf("Creating tables and indices failed: %s\n", err)
+			log.Fatalf("creating tables and indices failed: %s\n", err)
 		}
 
 		if *verbose {
-			fmt.Printf("Database setup complete. Loading...\n")
+			log.Printf("database setup complete. Loading...\n")
 		}
 
 		files, err := ioutil.ReadDir("./data/")
 		if err != nil {
-			log.Fatalf("Failed to read data directory for loading data: %s", err)
+			log.Fatalf("failed to read data directory for loading data: %s", err)
 		}
 
 		loadStart := time.Now()
@@ -179,25 +209,27 @@ func main() {
 		}
 
 		if *verbose {
-			fmt.Printf("Loading complete, total time elapsed: %s\n",
+			log.Printf("loading complete, total time elapsed: %s\n",
 				time.Since(loadStart))
 		}
 	}
 
+	// Create *concurrency goroutines, each looping over queries in *queries.
 	listQueries := strings.Split(*queries, ",")
+	var queries []int
 	for _, query := range listQueries {
-		start := time.Now()
 		query = strings.TrimSpace(query)
 		queryInt, err := strconv.Atoi(query)
 		if err != nil {
-			fmt.Printf("Error: Query %s must be an integer", query)
+			log.Fatalf("error: query %s must be an integer", query)
 		}
-		numRows, err := runQuery(db, queryInt)
-		elapsed := time.Now().Sub(start)
-		if err != nil {
-			fmt.Printf("Error occured when running query %s: %s\n", query, err)
-		}
-		fmt.Printf("Finished query %s: %d rows returned after %4.2f seconds\n",
-			query, numRows, elapsed.Seconds())
+		queries = append(queries, queryInt)
 	}
+	var wg sync.WaitGroup
+	var errorCount uint64
+	for i := uint(0); i < *concurrency; i++ {
+		wg.Add(1)
+		go loopQueries(i, db, queries, &wg, &errorCount)
+	}
+	wg.Wait()
 }
