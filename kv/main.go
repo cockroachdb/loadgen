@@ -560,6 +560,8 @@ func main() {
 			*benchmarkName, numOps, float64(elapsed.Nanoseconds())/float64(numOps))
 	}()
 
+	cumLatency := hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
+
 	for i := 0; ; {
 		select {
 		case err := <-errCh:
@@ -585,6 +587,7 @@ func main() {
 				}
 			}
 
+			cumLatency.Merge(h)
 			p95 := h.ValueAtQuantile(95)
 			p99 := h.ValueAtQuantile(99)
 			pMax := h.ValueAtQuantile(100)
@@ -608,12 +611,27 @@ func main() {
 			lastNow = now
 
 		case <-done:
+			for _, w := range writers {
+				w.latency.Lock()
+				m := w.latency.Merge()
+				w.latency.Rotate()
+				w.latency.Unlock()
+				cumLatency.Merge(m)
+			}
+
+			p95 := cumLatency.ValueAtQuantile(95)
+			p99 := cumLatency.ValueAtQuantile(99)
+			pMax := cumLatency.ValueAtQuantile(100)
+
 			ops := atomic.LoadUint64(&numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___errors____________ops___ops/sec(cum)_____seq(begin/end)")
-			fmt.Printf("%7.1fs %8d %14d %14.1f %18s\n\n",
+			fmt.Println("\n_elapsed___errors____________ops___ops/sec(cum)__p95(ms)__p99(ms)_pMax(ms)_____seq(begin/end)")
+			fmt.Printf("%7.1fs %8d %14d %14.1f %8.1f %8.1f %8.1f %18s\n\n",
 				time.Since(start).Seconds(), numErr,
 				ops, float64(ops)/elapsed,
+				time.Duration(p95).Seconds()*1000,
+				time.Duration(p99).Seconds()*1000,
+				time.Duration(pMax).Seconds()*1000,
 				fmt.Sprintf("%d / %d", *writeSeq, seq.read()))
 			return
 		}
