@@ -48,7 +48,7 @@ var queryStmts = [...]string{
 }
 
 func runQuery(db *sql.DB, query int) (int, error) {
-	var queryString string
+	queryString := "SET DISTSQL = 'off'; "
 	if *distsql {
 		queryString = "SET DISTSQL = 'always'; "
 	}
