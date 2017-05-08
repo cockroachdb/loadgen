@@ -119,8 +119,8 @@ func (s *sequence) read() int64 {
 	return atomic.LoadInt64(&s.val) % *cycleLength
 }
 
-// generator generates read and write keys. Read keys are guaranteed to
-// exist. A generator is NOT goroutine safe.
+// generator generates read and write keys. Read keys may not yet exist and write
+// keys may already exist.
 type generator struct {
 	seq    *sequence
 	rand   *rand.Rand
