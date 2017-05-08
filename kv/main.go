@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"hash"
 	"log"
+	"math"
 	"math/rand"
 	"net/url"
 	"os"
@@ -46,7 +47,8 @@ import (
 	_ "github.com/lib/pq"
 )
 
-var readPercent = flag.Int("read-percent", 0, "Percent of operations that are reads")
+var readPercent = flag.Int("read-percent", 0, "Percent (0-100) of operations that are reads of existing keys")
+var cycleLength = flag.Int64("cycle-length", math.MaxInt64, "Number of keys repeatedly accessed by each writer")
 
 // concurrency = number of concurrent insertion processes.
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of concurrent writers inserting blocks")
@@ -107,18 +109,18 @@ type sequence struct {
 }
 
 func (s *sequence) write() int64 {
-	return atomic.AddInt64(&s.val, 1) - 1
+	return (atomic.AddInt64(&s.val, 1) - 1) % *cycleLength
 }
 
-// read returns the max key index that has been written. Note that the returned
+// read returns the last key index that has been written. Note that the returned
 // index might not actually have been written yet, so a read operation cannot
 // require that the key is present.
 func (s *sequence) read() int64 {
-	return atomic.LoadInt64(&s.val)
+	return atomic.LoadInt64(&s.val) % *cycleLength
 }
 
-// generator generates read and write keys. Read keys are guaranteed to
-// exist. A generator is NOT goroutine safe.
+// generator generates read and write keys. Read keys may not yet exist and write
+// keys may already exist.
 type generator struct {
 	seq    *sequence
 	rand   *rand.Rand
