@@ -30,13 +30,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cockroach-go/crdb"
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
-	"sync"
 )
 
 var verbose = flag.Bool("v", false, "Print verbose debug output")
@@ -116,6 +116,7 @@ var usage = func() {
 // logging. Query errors are atomically added to errorCount, resulting in a
 // fatal error if we have more than *maxErrors errors.
 func loopQueries(id uint, db *sql.DB, queries []int, wg *sync.WaitGroup, errorCount *uint64) {
+	defer wg.Done()
 	for i := uint(0); i < *loops || *loops == 0; i++ {
 		for _, query := range queries {
 			if *verbose {
@@ -132,13 +133,12 @@ func loopQueries(id uint, db *sql.DB, queries []int, wg *sync.WaitGroup, errorCo
 				} else {
 					log.Fatal(wrappedErr)
 				}
-				return
+				continue
 			}
 			log.Printf("[%d] finished query %d: %d rows returned after %4.2f seconds\n",
 				id, query, numRows, elapsed.Seconds())
 		}
 	}
-	wg.Done()
 }
 
 func main() {
