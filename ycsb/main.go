@@ -28,6 +28,7 @@ import (
 	"hash"
 	"hash/fnv"
 	"log"
+	"math"
 	"math/rand"
 	"net/url"
 	"os"
@@ -59,11 +60,13 @@ const (
 
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(),
 	"Number of concurrent workers sending read/write requests.")
-var workload = flag.String("workload", "B", "workload type. Choose from A-E.")
+var workload = flag.String("workload", "B", "workload type. Choose from A-F.")
 var tolerateErrors = flag.Bool("tolerate-errors", false,
 	"Keep running on error. (default false)")
 var duration = flag.Duration("duration", 0,
 	"The duration to run. If 0, run forever.")
+var writeDuration = flag.Duration("write-duration", 0,
+	"The duration to perform writes. If 0, write forever.")
 var verbose = flag.Bool("v", false, "Print *verbose debug output")
 var drop = flag.Bool("drop", true,
 	"Drop the existing table and recreate it to start from scratch")
@@ -85,6 +88,8 @@ var mongoJ = flag.Bool("mongo-j", false, "Sync journal before op return")
 // Cassandra flags.
 var cassandraConsistency = flag.String("cassandra-consistency", "QUORUM", "Op consistency: ANY ONE TWO THREE QUORUM ALL LOCAL_QUORUM EACH_QUORUM LOCAL_ONE")
 var cassandraReplication = flag.Int("cassandra-replication", 1, "Replication factor for cassandra")
+
+var readOnly int32
 
 type database interface {
 	readRow(key uint64) (bool, error)
@@ -158,6 +163,8 @@ func newYcsbWorker(db database, zipfR *ZipfGenerator, workloadFlag string) *ycsb
 		scanFreq = 0.95
 		writeFreq = 0.05
 		panic("Workload E (scans) not implemented yet")
+	case "F", "f":
+		writeFreq = 1.0
 	}
 	r := rand.New(source)
 	return &ycsbWorker{
@@ -172,16 +179,16 @@ func newYcsbWorker(db database, zipfR *ZipfGenerator, workloadFlag string) *ycsb
 	}
 }
 
-func (yw *ycsbWorker) hashKey(key, maxValue uint64) uint64 {
+func (yw *ycsbWorker) hashKey(key uint64) uint64 {
 	yw.hashBuf = [8]byte{} // clear hashBuf
 	binary.PutUvarint(yw.hashBuf[:], key)
 	yw.hashFunc.Reset()
 	if _, err := yw.hashFunc.Write(yw.hashBuf[:]); err != nil {
 		panic(err)
 	}
-	hashedKey := yw.hashFunc.Sum64()
-	hashedKeyModMax := hashedKey % maxValue
-	return hashedKeyModMax
+	// The Go sql driver interface does not support having the high-bit set in
+	// uint64 values!
+	return yw.hashFunc.Sum64() & math.MaxInt64
 }
 
 // Keys are chosen by first drawing from a Zipf distribution and hashing the
@@ -190,7 +197,7 @@ func (yw *ycsbWorker) hashKey(key, maxValue uint64) uint64 {
 func (yw *ycsbWorker) nextReadKey() uint64 {
 	var hashedKey uint64
 	key := yw.zipfR.Uint64()
-	hashedKey = yw.hashKey(key, *maxWrites)
+	hashedKey = yw.hashKey(key)
 	if *verbose {
 		fmt.Printf("reader: %d -> %d\n", key, hashedKey)
 	}
@@ -199,9 +206,9 @@ func (yw *ycsbWorker) nextReadKey() uint64 {
 
 func (yw *ycsbWorker) nextWriteKey() uint64 {
 	key := yw.zipfR.IMaxHead()
-	hashedKey := yw.hashKey(key, *maxWrites)
+	hashedKey := yw.hashKey(key)
 	if *verbose {
-		fmt.Printf("writer: fnv(%d) -> %d\n", key, hashedKey)
+		fmt.Printf("writer: %d -> %d\n", key, hashedKey)
 	}
 	return hashedKey
 }
@@ -211,7 +218,7 @@ func (yw *ycsbWorker) nextWriteKey() uint64 {
 func (yw *ycsbWorker) runLoader(n uint64, numWorkers int, thisWorkerNum int, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for i := uint64(thisWorkerNum + zipfIMin); i < n; i += uint64(numWorkers) {
-		hashedKey := yw.hashKey(i, *maxWrites)
+		hashedKey := yw.hashKey(i)
 		if err := yw.insertRow(hashedKey, false); err != nil {
 			if *verbose {
 				fmt.Printf("error loading row %d: %s\n", i, err)
@@ -310,15 +317,16 @@ func (yw *ycsbWorker) scanRows() error {
 // Choose an operation in proportion to the frequencies.
 func (yw *ycsbWorker) chooseOp() operation {
 	p := yw.r.Float32()
-	if p <= yw.readFreq {
-		return readOp
-	}
-	p -= yw.readFreq
-	if p <= yw.writeFreq {
+	if atomic.LoadInt32(&readOnly) == 0 && p <= yw.writeFreq {
 		return writeOp
 	}
 	p -= yw.writeFreq
-	return scanOp
+	// If both scanFreq and readFreq are 0 default to readOp if we've reached
+	// this point because readOnly is true.
+	if p <= yw.scanFreq {
+		return scanOp
+	}
+	return readOp
 }
 
 type cockroach struct {
@@ -414,7 +422,7 @@ CREATE TABLE IF NOT EXISTS ycsb.usertable (
 		// ZipfGenerator is ok.
 		w := newYcsbWorker(nil, nil, *workload)
 		for i := 0; i < *splits; i++ {
-			key := w.hashKey(uint64(i), *maxWrites)
+			key := w.hashKey(uint64(i))
 			if _, err := db.Exec(`ALTER TABLE ycsb.usertable SPLIT AT VALUES ($1)`, key); err != nil {
 				log.Fatal(err)
 			}
@@ -666,6 +674,13 @@ func main() {
 		go func() {
 			time.Sleep(*duration)
 			done <- syscall.Signal(0)
+		}()
+	}
+
+	if *writeDuration > 0 {
+		go func() {
+			time.Sleep(*writeDuration)
+			atomic.StoreInt32(&readOnly, 1)
 		}()
 	}
 
