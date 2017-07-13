@@ -38,6 +38,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
 	mgo "gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
@@ -597,6 +598,18 @@ func snapshotStats() (s [statsLength]uint64) {
 	return s
 }
 
+type atomicTime struct {
+	ptr unsafe.Pointer
+}
+
+func (t *atomicTime) set(v time.Time) {
+	atomic.StorePointer(&t.ptr, unsafe.Pointer(&v))
+}
+
+func (t *atomicTime) get() time.Time {
+	return *(*time.Time)(atomic.LoadPointer(&t.ptr))
+}
+
 func main() {
 	flag.Usage = usage
 	flag.Parse()
@@ -637,56 +650,54 @@ func main() {
 		workers[i] = newYcsbWorker(db.clone(), zipfR, *workload)
 	}
 
-	loadStart := time.Now()
-	var wg sync.WaitGroup
-	// TODO(peter): Using all of the workers for loading leads to errors with
-	// some of the insert statements receiving an EOF. For now, use a single
-	// worker.
-	for i, n := 0, 1; i < n; i++ {
-		wg.Add(1)
-		go workers[i].runLoader(*initialLoad, n, i, &wg)
-	}
-	wg.Wait()
-	if *verbose {
-		fmt.Printf("Loading complete, total time elapsed: %s\n",
-			time.Since(loadStart))
-	}
-
-	wg = sync.WaitGroup{}
 	errCh := make(chan error)
-
-	for i := range workers {
-		wg.Add(1)
-		go workers[i].runWorker(errCh, &wg)
-	}
-
-	var numErr int
 	tick := time.Tick(1 * time.Second)
 	done := make(chan os.Signal, 3)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
+	var start atomicTime
+	var startOpsCount uint64
+	var numErr int
+	start.set(time.Now())
 
 	go func() {
+		loadStart := time.Now()
+		var wg sync.WaitGroup
+		for i, n := 0, len(workers); i < n; i++ {
+			wg.Add(1)
+			go workers[i].runLoader(*initialLoad, n, i, &wg)
+		}
 		wg.Wait()
-		done <- syscall.Signal(0)
-	}()
+		fmt.Printf("Loading complete: %.1fs\n", time.Since(loadStart).Seconds())
 
-	if *duration > 0 {
+		// Reset the start time and stats.
+		start.set(time.Now())
+		atomic.StoreUint64(&startOpsCount, 0)
+
+		wg = sync.WaitGroup{}
+		for i := range workers {
+			wg.Add(1)
+			go workers[i].runWorker(errCh, &wg)
+		}
+
 		go func() {
-			time.Sleep(*duration)
+			wg.Wait()
 			done <- syscall.Signal(0)
 		}()
-	}
 
-	if *writeDuration > 0 {
-		go func() {
-			time.Sleep(*writeDuration)
-			atomic.StoreInt32(&readOnly, 1)
-		}()
-	}
+		if *duration > 0 {
+			go func() {
+				time.Sleep(*duration)
+				done <- syscall.Signal(0)
+			}()
+		}
 
-	start := time.Now()
-	startOpsCount := globalStats[writes] + globalStats[emptyReads] +
-		globalStats[nonEmptyReads] + globalStats[scans]
+		if *writeDuration > 0 {
+			go func() {
+				time.Sleep(*writeDuration)
+				atomic.StoreInt32(&readOnly, 1)
+			}()
+		}
+	}()
 
 	for i := 0; ; {
 		select {
@@ -710,7 +721,7 @@ func main() {
 				fmt.Printf("elapsed______ops/sec__reads/empty/errors___writes/errors____scans/errors\n")
 			}
 			fmt.Printf("%7s %12.1f %19s %15s %15s\n",
-				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
+				time.Duration(time.Since(start.get()).Seconds()+0.5)*time.Second,
 				float64(opsCount-lastOpsCount)/elapsed.Seconds(),
 				fmt.Sprintf("%d / %d / %d",
 					stats[nonEmptyReads]-lastStats[nonEmptyReads],
@@ -730,11 +741,11 @@ func main() {
 		case <-done:
 			stats := snapshotStats()
 			opsCount := stats[writes] + stats[emptyReads] +
-				stats[nonEmptyReads] + stats[scans] - startOpsCount
-			elapsed := time.Since(start).Seconds()
+				stats[nonEmptyReads] + stats[scans] - atomic.LoadUint64(&startOpsCount)
+			elapsed := time.Since(start.get()).Seconds()
 			fmt.Printf("\nelapsed__ops/sec(total)__errors(total)\n")
 			fmt.Printf("%6.1fs %14.1f %14d\n",
-				time.Since(start).Seconds(),
+				time.Since(start.get()).Seconds(),
 				float64(opsCount)/elapsed, numErr)
 			return
 		}
