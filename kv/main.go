@@ -73,6 +73,7 @@ var maxOps = flag.Uint64("max-ops", 0, "Maximum number of blocks to read/write")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
 var writeSeq = flag.Int64("write-seq", 0, "Initial write sequence value.")
 var seqSeed = flag.Int64("seed", time.Now().UnixNano(), "Key hash seed.")
+var sequentialWrites = flag.Bool("sequential-writes", false, "Pick keys sequentially instead of randomly.")
 var drop = flag.Bool("drop", false, "Clear the existing data before starting.")
 var benchmarkName = flag.String("benchmark-name", "BenchmarkBlocks", "Test name to report "+
 	"for Go benchmark results.")
@@ -104,8 +105,9 @@ func clampLatency(d, min, max time.Duration) time.Duration {
 }
 
 type sequence struct {
-	val  int64
-	seed int64
+	firstVal int64
+	val      int64
+	seed     int64
 }
 
 func (s *sequence) write() int64 {
@@ -121,22 +123,28 @@ func (s *sequence) read() int64 {
 
 // generator generates read and write keys. Read keys may not yet exist and write
 // keys may already exist.
-type generator struct {
+type generator interface {
+	writeKey() int64
+	readKey() int64
+	rand() *rand.Rand
+}
+
+type hashGenerator struct {
 	seq    *sequence
-	rand   *rand.Rand
+	random *rand.Rand
 	hasher hash.Hash
 	buf    [sha1.Size]byte
 }
 
-func newGenerator(seq *sequence) *generator {
-	return &generator{
+func newHashGenerator(seq *sequence) *hashGenerator {
+	return &hashGenerator{
 		seq:    seq,
-		rand:   rand.New(rand.NewSource(int64(time.Now().UnixNano()))),
+		random: rand.New(rand.NewSource(int64(time.Now().UnixNano()))),
 		hasher: sha1.New(),
 	}
 }
 
-func (g *generator) hash(v int64) int64 {
+func (g *hashGenerator) hash(v int64) int64 {
 	binary.BigEndian.PutUint64(g.buf[:8], uint64(v))
 	binary.BigEndian.PutUint64(g.buf[8:16], uint64(g.seq.seed))
 	g.hasher.Reset()
@@ -145,46 +153,78 @@ func (g *generator) hash(v int64) int64 {
 	return int64(binary.BigEndian.Uint64(g.buf[:8]))
 }
 
-func (g *generator) writeKey() int64 {
+func (g *hashGenerator) writeKey() int64 {
 	return g.hash(g.seq.write())
 }
 
-func (g *generator) readKey() int64 {
+func (g *hashGenerator) readKey() int64 {
 	v := g.seq.read()
 	if v == 0 {
 		return 0
 	}
-	return g.hash(g.rand.Int63n(v))
+	return g.hash(g.random.Int63n(v))
 }
 
-func (g *generator) randomBlock() []byte {
-	blockSize := g.rand.Intn(*maxBlockSizeBytes-*minBlockSizeBytes) + *minBlockSizeBytes
+func (g *hashGenerator) rand() *rand.Rand {
+	return g.random
+}
+
+type sequentialGenerator struct {
+	seq    *sequence
+	random *rand.Rand
+}
+
+func newSequentialGenerator(seq *sequence) *sequentialGenerator {
+	return &sequentialGenerator{
+		seq:    seq,
+		random: rand.New(rand.NewSource(int64(time.Now().UnixNano()))),
+	}
+}
+
+func (g *sequentialGenerator) writeKey() int64 {
+	return g.seq.write()
+}
+
+func (g *sequentialGenerator) readKey() int64 {
+	oldest, newest := g.seq.firstVal, g.seq.read()
+	if oldest == newest {
+		return oldest
+	}
+	return oldest + g.random.Int63n(newest-oldest)
+}
+
+func (g *sequentialGenerator) rand() *rand.Rand {
+	return g.random
+}
+
+func randomBlock(r *rand.Rand) []byte {
+	blockSize := r.Intn(*maxBlockSizeBytes-*minBlockSizeBytes) + *minBlockSizeBytes
 	blockData := make([]byte, blockSize)
 	for i := range blockData {
-		blockData[i] = byte(g.rand.Int() & 0xff)
+		blockData[i] = byte(r.Int() & 0xff)
 	}
 	return blockData
 }
 
 type database interface {
 	read(key int64) error
-	write(count int, g *generator) error
+	write(count int, g generator) error
 	clone() database
 }
 
 type blocker struct {
 	db      database
-	gen     *generator
+	gen     generator
 	latency struct {
 		sync.Mutex
 		*hdrhistogram.WindowedHistogram
 	}
 }
 
-func newBlocker(db database, seq *sequence) *blocker {
+func newBlocker(db database, gen generator) *blocker {
 	b := &blocker{
 		db:  db,
-		gen: newGenerator(seq),
+		gen: gen,
 	}
 	b.latency.WindowedHistogram = hdrhistogram.NewWindowed(1,
 		minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
@@ -206,7 +246,7 @@ func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limi
 
 		start := time.Now()
 		var err error
-		if b.gen.rand.Intn(100) < *readPercent {
+		if b.gen.rand().Intn(100) < *readPercent {
 			err = b.db.read(b.gen.readKey())
 		} else {
 			err = b.db.write(*batch, b.gen)
@@ -242,13 +282,13 @@ func (c *cockroach) read(k int64) error {
 	return nil
 }
 
-func (c *cockroach) write(count int, g *generator) error {
+func (c *cockroach) write(count int, g generator) error {
 	const argCount = 2
 	args := make([]interface{}, argCount*count)
 	for i := 0; i < count; i++ {
 		j := i * argCount
 		args[j+0] = g.writeKey()
-		args[j+1] = g.randomBlock()
+		args[j+1] = randomBlock(g.rand())
 	}
 	// TODO(peter): The key generation is not guaranteed unique. Consider using
 	// UPSERT, though initial tests show that is half the speed. Or perhaps
@@ -291,7 +331,7 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 
 	if *splits > 0 {
 		r := rand.New(rand.NewSource(int64(time.Now().UnixNano())))
-		g := newGenerator(&sequence{val: *writeSeq, seed: *seqSeed})
+		g := newHashGenerator(&sequence{firstVal: *writeSeq, val: *writeSeq, seed: *seqSeed})
 		for i := 0; i < *splits; i++ {
 			if _, err := db.Exec(`ALTER TABLE test.kv SPLIT AT VALUES ($1)`, g.hash(r.Int63())); err != nil {
 				return nil, err
@@ -347,12 +387,12 @@ func (m *mongo) read(key int64) error {
 	return nil
 }
 
-func (m *mongo) write(count int, g *generator) error {
+func (m *mongo) write(count int, g generator) error {
 	docs := make([]interface{}, count)
 	for i := 0; i < count; i++ {
 		docs[i] = &mongoBlock{
 			Key:   g.writeKey(),
-			Value: g.randomBlock(),
+			Value: randomBlock(g.rand()),
 		}
 	}
 
@@ -401,7 +441,7 @@ func (c *cassandra) read(key int64) error {
 	return nil
 }
 
-func (c *cassandra) write(count int, g *generator) error {
+func (c *cassandra) write(count int, g generator) error {
 	const insertBlockStmt = "INSERT INTO test.kv (k, v) VALUES (?, ?); "
 
 	var buf bytes.Buffer
@@ -412,7 +452,7 @@ func (c *cassandra) write(count int, g *generator) error {
 	for i := 0; i < count; i++ {
 		j := i * argCount
 		args[j+0] = g.writeKey()
-		args[j+1] = g.randomBlock()
+		args[j+1] = randomBlock(g.rand())
 		buf.WriteString(insertBlockStmt)
 	}
 
@@ -503,6 +543,10 @@ func main() {
 		log.Fatalf("Value of 'max-block-bytes' (%d) must be greater than or equal to value of 'min-block-bytes' (%d)", max, min)
 	}
 
+	if *sequentialWrites && *splits > 0 {
+		log.Fatalf("'sequential-writes' and 'splits' cannot both be enabled")
+	}
+
 	var db database
 	{
 		var err error
@@ -529,12 +573,16 @@ func main() {
 	var lastOps uint64
 	writers := make([]*blocker, *concurrency)
 
-	seq := &sequence{val: *writeSeq, seed: *seqSeed}
+	seq := &sequence{firstVal: *writeSeq, val: *writeSeq, seed: *seqSeed}
 	errCh := make(chan error)
 	var wg sync.WaitGroup
 	for i := range writers {
 		wg.Add(1)
-		writers[i] = newBlocker(db.clone(), seq)
+		if *sequentialWrites {
+			writers[i] = newBlocker(db.clone(), newSequentialGenerator(seq))
+		} else {
+			writers[i] = newBlocker(db.clone(), newHashGenerator(seq))
+		}
 		go writers[i].run(errCh, &wg, limiter)
 	}
 
