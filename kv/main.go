@@ -336,6 +336,10 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 				return nil, err
 			}
 		}
+
+		if _, err := db.Exec(`ALTER TABLE test.kv SCATTER`); err != nil {
+			return nil, err
+		}
 	}
 
 	readStmt, err := db.Prepare(`SELECT k, v FROM test.kv WHERE k = $1`)

@@ -428,6 +428,10 @@ CREATE TABLE IF NOT EXISTS ycsb.usertable (
 				log.Fatal(err)
 			}
 		}
+
+		if _, err := db.Exec(`ALTER TABLE ycsb.usertable SCATTER`); err != nil {
+			return nil, err
+		}
 	}
 
 	return &cockroach{db: db}, nil
