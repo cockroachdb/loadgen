@@ -389,18 +389,6 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 		}
 	}
 
-	if *drop {
-		if *verbose {
-			fmt.Println("Dropping the table")
-		}
-		if _, err := db.Exec("DROP TABLE IF EXISTS ycsb.usertable"); err != nil {
-			if *verbose {
-				fmt.Printf("Failed to drop the table: %s\n", err)
-			}
-			return nil, err
-		}
-	}
-
 	if *strictPostgres {
 		// Since we use absolute paths (ycsb.usertable), create a Postgres schema
 		// to make the absolute paths work.
@@ -410,6 +398,18 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 			}
 			// Do not fail on this error, as we want strict postgres mode to
 			// also work on Cockroach, and Cockroach doesn't have CREATE SCHEMA.
+		}
+	}
+
+	if *drop {
+		if *verbose {
+			fmt.Println("Dropping the table")
+		}
+		if _, err := db.Exec("DROP TABLE IF EXISTS ycsb.usertable"); err != nil {
+			if *verbose {
+				fmt.Printf("Failed to drop the table: %s\n", err)
+			}
+			return nil, err
 		}
 	}
 
