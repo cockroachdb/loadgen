@@ -75,6 +75,8 @@ var rateLimit = flag.Uint64("rate-limit", 0,
 	"Maximum number of operations per second per worker. Set to zero for no rate limit")
 var initialLoad = flag.Uint64("initial-load", 10000,
 	"Initial number of rows to sequentially insert before beginning Zipfian workload generation")
+var strictPostgres = flag.Bool("strict-postgres", false,
+	"Use Postgres compatible syntax, without any Cockroach specific extensions")
 
 // 7 days at 5% writes and 30k ops/s
 var maxWrites = flag.Uint64("max-writes", 7*24*3600*1500,
@@ -335,7 +337,13 @@ type cockroach struct {
 }
 
 func (c *cockroach) readRow(key uint64) (bool, error) {
-	res, err := c.db.Query(fmt.Sprintf("SELECT * FROM ycsb.usertable WHERE ycsb_key=%d", key))
+	var readString string
+	if *strictPostgres {
+		readString = fmt.Sprintf("SELECT * FROM usertable WHERE ycsb_key=%d", key)
+	} else {
+		readString = fmt.Sprintf("SELECT * FROM ycsb.usertable WHERE ycsb_key=%d", key)
+	}
+	res, err := c.db.Query(readString)
 	if err != nil {
 		return false, err
 	}
@@ -355,7 +363,11 @@ func (c *cockroach) readRow(key uint64) (bool, error) {
 func (c *cockroach) insertRow(key uint64, fields []string) error {
 	// TODO(arjun): Consider using a prepared statement here.
 	var buf bytes.Buffer
-	buf.WriteString("INSERT INTO ycsb.usertable VALUES (")
+	if *strictPostgres {
+		buf.WriteString("INSERT INTO usertable VALUES (")
+	} else {
+		buf.WriteString("INSERT INTO ycsb.usertable VALUES (")
+	}
 	fmt.Fprintf(&buf, "%d", key)
 	for _, s := range fields {
 		fmt.Fprintf(&buf, ", '%s'", s)
@@ -380,10 +392,14 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	db.SetMaxOpenConns(*concurrency + 1)
 	db.SetMaxIdleConns(*concurrency + 1)
 
-	if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS ycsb"); err != nil {
-		if *verbose {
-			fmt.Printf("Failed to create the database, attempting to continue... %s\n",
-				err)
+	if *strictPostgres {
+		fmt.Println("In strict postgres mode, assuming database exists. Use 'createdb' to manually create")
+	} else {
+		if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS ycsb"); err != nil {
+			if *verbose {
+				fmt.Printf("Failed to create the database, attempting to continue... %s\n",
+					err)
+			}
 		}
 	}
 
@@ -391,7 +407,13 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 		if *verbose {
 			fmt.Println("Dropping the table")
 		}
-		if _, err := db.Exec("DROP TABLE IF EXISTS ycsb.usertable"); err != nil {
+		var dropString string
+		if *strictPostgres {
+			dropString = "DROP TABLE IF EXISTS usertable"
+		} else {
+			dropString = "DROP TABLE IF EXISTS ycsb.usertable"
+		}
+		if _, err := db.Exec(dropString); err != nil {
 			if *verbose {
 				fmt.Printf("Failed to drop the table: %s\n", err)
 			}
@@ -401,8 +423,8 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 
 	// Create the initial table for storing blocks.
 	createStmt := `
-CREATE TABLE IF NOT EXISTS ycsb.usertable (
-	ycsb_key INT PRIMARY KEY NOT NULL,
+CREATE TABLE IF NOT EXISTS usertable (
+	ycsb_key BIGINT PRIMARY KEY NOT NULL,
 	FIELD1 TEXT,
 	FIELD2 TEXT,
 	FIELD3 TEXT,
