@@ -637,6 +637,7 @@ func main() {
 			}
 
 			cumLatency.Merge(h)
+			p50 := h.ValueAtQuantile(50)
 			p95 := h.ValueAtQuantile(95)
 			p99 := h.ValueAtQuantile(99)
 			pMax := h.ValueAtQuantile(100)
@@ -645,14 +646,15 @@ func main() {
 			elapsed := now.Sub(lastNow)
 			ops := atomic.LoadUint64(&numOps)
 			if i%20 == 0 {
-				fmt.Println("_elapsed___errors__ops/sec(inst)___ops/sec(cum)__p95(ms)__p99(ms)_pMax(ms)")
+				fmt.Println("_elapsed___errors__ops/sec(inst)___ops/sec(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
 			}
 			i++
-			fmt.Printf("%8s %8d %14.1f %14.1f %8.1f %8.1f %8.1f\n",
+			fmt.Printf("%8s %8d %14.1f %14.1f %8.1f %8.1f %8.1f %8.1f\n",
 				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
 				numErr,
 				float64(ops-lastOps)/elapsed.Seconds(),
 				float64(ops)/time.Since(start).Seconds(),
+				time.Duration(p50).Seconds()*1000,
 				time.Duration(p95).Seconds()*1000,
 				time.Duration(p99).Seconds()*1000,
 				time.Duration(pMax).Seconds()*1000)
@@ -668,20 +670,23 @@ func main() {
 				cumLatency.Merge(m)
 			}
 
+			avg := cumLatency.Mean()
+			p50 := cumLatency.ValueAtQuantile(50)
 			p95 := cumLatency.ValueAtQuantile(95)
 			p99 := cumLatency.ValueAtQuantile(99)
 			pMax := cumLatency.ValueAtQuantile(100)
 
 			ops := atomic.LoadUint64(&numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___errors____________ops___ops/sec(cum)__p95(ms)__p99(ms)_pMax(ms)_____seq(begin/end)")
-			fmt.Printf("%7.1fs %8d %14d %14.1f %8.1f %8.1f %8.1f %18s\n\n",
+			fmt.Println("\n_elapsed___errors_____ops(total)___ops/sec(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+			fmt.Printf("%7.1fs %8d %14d %14.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
 				time.Since(start).Seconds(), numErr,
 				ops, float64(ops)/elapsed,
+				time.Duration(avg).Seconds()*1000,
+				time.Duration(p50).Seconds()*1000,
 				time.Duration(p95).Seconds()*1000,
 				time.Duration(p99).Seconds()*1000,
-				time.Duration(pMax).Seconds()*1000,
-				fmt.Sprintf("%d / %d", *writeSeq, seq.read()))
+				time.Duration(pMax).Seconds()*1000)
 			return
 		}
 	}
