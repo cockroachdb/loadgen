@@ -75,6 +75,8 @@ var rateLimit = flag.Uint64("rate-limit", 0,
 	"Maximum number of operations per second per worker. Set to zero for no rate limit")
 var initialLoad = flag.Uint64("initial-load", 10000,
 	"Initial number of rows to sequentially insert before beginning Zipfian workload generation")
+var strictPostgres = flag.Bool("strict-postgres", false,
+	"Use Postgres compatible syntax, without any Cockroach specific extensions")
 
 // 7 days at 5% writes and 30k ops/s
 var maxWrites = flag.Uint64("max-writes", 7*24*3600*1500,
@@ -399,10 +401,22 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 		}
 	}
 
+	if *strictPostgres {
+		// Since we use absolute paths (ycsb.usertable), create a Postgres schema
+		// to make the absolute paths work.
+		if _, err := db.Exec("CREATE SCHEMA IF NOT EXISTS ycsb"); err != nil {
+			if *verbose {
+				fmt.Printf("Failed to create schema: %s\n", err)
+			}
+			// Do not fail on this error, as we want strict postgres mode to
+			// also work on Cockroach, and Cockroach doesn't have CREATE SCHEMA.
+		}
+	}
+
 	// Create the initial table for storing blocks.
 	createStmt := `
 CREATE TABLE IF NOT EXISTS ycsb.usertable (
-	ycsb_key INT PRIMARY KEY NOT NULL,
+	ycsb_key BIGINT PRIMARY KEY NOT NULL,
 	FIELD1 TEXT,
 	FIELD2 TEXT,
 	FIELD3 TEXT,
