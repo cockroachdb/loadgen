@@ -30,6 +30,7 @@ import (
 const nItems = 100000
 const nStock = 100000
 const nCustomers = 3000
+const originalString = "ORIGINAL"
 
 // District constants
 const ytd = 30000.00 // also used by warehouse
