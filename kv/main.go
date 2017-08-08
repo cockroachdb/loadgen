@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -297,6 +298,12 @@ func (c *cockroach) clone() database {
 	return c
 }
 
+type int64Slice []int64
+
+func (p int64Slice) Len() int           { return len(p) }
+func (p int64Slice) Less(i, j int) bool { return p[i] < p[j] }
+func (p int64Slice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+
 func setupCockroach(parsedURL *url.URL) (database, error) {
 	// Open connection to server and create a database.
 	db, dbErr := sql.Open("postgres", parsedURL.String())
@@ -328,15 +335,64 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	if *splits > 0 {
 		r := rand.New(rand.NewSource(int64(time.Now().UnixNano())))
 		g := newHashGenerator(&sequence{val: *writeSeq, seed: *seqSeed})
+
+		splitPoints := make([]int64, *splits)
 		for i := 0; i < *splits; i++ {
-			if _, err := db.Exec(`ALTER TABLE test.kv SPLIT AT VALUES ($1)`, g.hash(r.Int63())); err != nil {
-				return nil, err
-			}
+			splitPoints[i] = g.hash(r.Int63())
+		}
+		sort.Sort(int64Slice(splitPoints))
+
+		type pair struct {
+			lo, hi int
+		}
+		splitCh := make(chan pair, *concurrency)
+		splitCh <- pair{0, len(splitPoints)}
+		doneCh := make(chan struct{})
+
+		var wg sync.WaitGroup
+		for i := 0; i < *concurrency; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					p, ok := <-splitCh
+					if !ok {
+						break
+					}
+					m := (p.lo + p.hi) / 2
+					split := splitPoints[m]
+					if _, err := db.Exec(`ALTER TABLE test.kv SPLIT AT VALUES ($1)`, split); err != nil {
+						log.Fatal(err)
+					}
+					// NB: the split+1 expression below guarantees our scatter range
+					// touches both sides of the split.
+					if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE test.kv SCATTER FROM (%d) TO (%d)`,
+						splitPoints[p.lo], split+1)); err != nil {
+						// SCATTER can collide with normal replicate queue operations and
+						// fail spuriously, so only print the error.
+						log.Print(err)
+					}
+					doneCh <- struct{}{}
+					go func() {
+						if p.lo < m {
+							splitCh <- pair{p.lo, m}
+						}
+						if m+1 < p.hi {
+							splitCh <- pair{m + 1, p.hi}
+						}
+					}()
+				}
+			}()
 		}
 
-		if _, err := db.Exec(`ALTER TABLE test.kv SCATTER`); err != nil {
-			return nil, err
+		for i := 0; i < len(splitPoints); i++ {
+			<-doneCh
+			if (i+1)%1000 == 0 {
+				fmt.Printf("%d splits\n", i+1)
+			}
 		}
+		close(splitCh)
+		wg.Wait()
 	}
 
 	readStmt, err := db.Prepare(`SELECT k, v FROM test.kv WHERE k = $1`)
