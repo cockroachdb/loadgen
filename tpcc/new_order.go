@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach-go/crdb"
+	"github.com/lib/pq"
 )
 
 // From the TPCC spec, section 2.4:
@@ -44,6 +45,8 @@ type orderItem struct {
 	s_quantity     int    // stock quantity
 	brand_generic  string
 	i_price        float64 // item price
+	ol_amount      float64 // order amount
+	ol_delivery_d  pq.NullTime
 
 	remoteWarehouse bool // internal use - item from a local or remote warehouse?
 }
@@ -68,7 +71,15 @@ type newOrderData struct {
 
 var simError = errors.New("simulated user error")
 
-func newOrder(db *sql.DB, w_id int) (newOrderData, error) {
+type newOrder struct{}
+
+var _ tpccTx = newOrder{}
+
+func (_ newOrder) weight() int {
+	return newOrderWeight
+}
+
+func (_ newOrder) run(db *sql.DB, w_id int) (interface{}, error) {
 	d := newOrderData{
 		w_id:     w_id,
 		d_id:     randInt(1, 10),
@@ -201,8 +212,8 @@ func newOrder(db *sql.DB, w_id int) (newOrderData, error) {
 				item.brand_generic = "G"
 			}
 
-			ol_amount := float64(item.ol_quantity) * item.i_price
-			d.total_amount += ol_amount
+			item.ol_amount = float64(item.ol_quantity) * item.i_price
+			d.total_amount += item.ol_amount
 			if _, err := insertOrderLine.Exec(
 				d.o_id, // ol_o_id
 				d.d_id,
@@ -211,7 +222,7 @@ func newOrder(db *sql.DB, w_id int) (newOrderData, error) {
 				item.ol_i_id,
 				item.ol_supply_w_id,
 				item.ol_quantity,
-				ol_amount,
+				item.ol_amount,
 				dist_info, // ol_dist_info is set to the contents of s_dist_xx
 			); err != nil {
 				return err

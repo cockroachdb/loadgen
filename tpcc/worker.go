@@ -44,11 +44,40 @@ func clampLatency(d, min, max time.Duration) time.Duration {
 	return d
 }
 
+// These should add to 100. They're percent likelihoods that each transaction
+// type is run. They match the TPCC spec - so probably don't tune these.
+const (
+	newOrderWeight    = 45
+	paymentWeight     = 43
+	orderStatusWeight = 4
+	deliveryWeight    = 4
+	stockLevelWeight  = 4
+)
+
+type tpccTx interface {
+	run(db *sql.DB, w_id int) (interface{}, error)
+	weight() int
+}
+
+var txs = []tpccTx{
+	orderStatus{},
+	newOrder{}, // newOrder must come last as its the default.
+}
+
 func (w *worker) run(errCh chan<- error, wg *sync.WaitGroup) {
 	for {
 		start := time.Now()
-		// TODO(jordan): implement transaction type distribution
-		if _, err := newOrder(w.db, rand.Intn(*warehouses)); err != nil {
+		transactionType := rand.Intn(100)
+		weightTotal := 0
+		var tx tpccTx
+		for i := range txs {
+			tx = txs[i]
+			weightTotal += tx.weight()
+			if transactionType < weightTotal {
+				break
+			}
+		}
+		if _, err := tx.run(w.db, rand.Intn(*warehouses)); err != nil {
 			errCh <- err
 			continue
 		}
