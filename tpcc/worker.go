@@ -63,7 +63,8 @@ var txs = []tpccTx{
 	payment{},
 	orderStatus{},
 	delivery{},
-	newOrder{}, // newOrder must come last as its the default.
+	stockLevel{},
+	newOrder{},
 }
 
 func (w *worker) run(errCh chan<- error, wg *sync.WaitGroup) {
