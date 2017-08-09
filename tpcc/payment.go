@@ -114,10 +114,10 @@ func (_ payment) run(db *sql.DB, w_id int) (interface{}, error) {
 		var w_name, d_name string
 		// Update warehouse with payment
 		if err := tx.QueryRow(`
-			UPDATE warehouse
-			SET w_ytd = w_ytd + $1
-			WHERE w_id = $2
-			RETURNING w_name, w_street_1, w_street_2, w_city, w_state, w_zip`,
+				UPDATE warehouse
+				SET w_ytd = w_ytd + $1
+				WHERE w_id = $2
+				RETURNING w_name, w_street_1, w_street_2, w_city, w_state, w_zip`,
 			d.h_amount, w_id,
 		).Scan(&w_name, &d.w_street_1, &d.w_street_2, &d.w_city, &d.w_state, &d.w_zip); err != nil {
 			return err
@@ -125,10 +125,10 @@ func (_ payment) run(db *sql.DB, w_id int) (interface{}, error) {
 
 		// Update district with payment
 		if err := tx.QueryRow(`
-			UPDATE district
-			SET d_ytd = d_ytd + $1
-			WHERE d_w_id = $2 AND d_id = $3
-			RETURNING d_name, d_street_1, d_street_2, d_city, d_state, d_zip`,
+				UPDATE district
+				SET d_ytd = d_ytd + $1
+				WHERE d_w_id = $2 AND d_id = $3
+				RETURNING d_name, d_street_1, d_street_2, d_city, d_state, d_zip`,
 			d.h_amount, w_id, d.d_id,
 		).Scan(&d_name, &d.d_street_1, &d.d_street_2, &d.d_city, &d.d_state, &d.d_zip); err != nil {
 			return err
@@ -139,10 +139,10 @@ func (_ payment) run(db *sql.DB, w_id int) (interface{}, error) {
 		if d.c_id == 0 {
 			// 2.5.2.2 Case 2: Pick the middle row, rounded up, from the selection by last name.
 			rows, err := tx.Query(`
-				SELECT c_id
-				FROM customer
-				WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
-				ORDER BY c_first ASC`,
+					SELECT c_id
+					FROM customer
+					WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
+					ORDER BY c_first ASC`,
 				w_id, d.d_id, d.c_last)
 			if err != nil {
 				return errors.Wrap(err, "select by last name fail")
