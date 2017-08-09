@@ -34,6 +34,7 @@ import (
 )
 
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of concurrent writers inserting blocks")
+var ddls = flag.String("ddls", "ddls.sql", "which ddls file to load")
 var drop = flag.Bool("drop", false, "Drop the database and recreate")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
 var load = flag.Bool("load", false, "Generate fresh TPCC data. Use with -drop")
@@ -105,9 +106,8 @@ func main() {
 		}
 	}
 
-	loadSchema(db)
-
 	if *load {
+		loadSchema(db)
 		generateData(db)
 	}
 

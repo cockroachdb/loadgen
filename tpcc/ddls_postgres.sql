@@ -1,6 +1,6 @@
-create database if not exists tpcc;
+-- Need to run CREATE DATABASE tpcc by hand first.
 
-create table if not exists warehouse (
+create table warehouse (
   w_id        integer   not null primary key,
   w_name      varchar(10),
   w_street_1  varchar(20),
@@ -13,7 +13,7 @@ create table if not exists warehouse (
 );
 
 -- 10 districts per warehouse
-create table if not exists district (
+create table district (
   d_id         integer       not null,
   d_w_id       integer       not null,
   d_name       varchar(10),
@@ -29,7 +29,7 @@ create table if not exists district (
   foreign key (d_w_id) references warehouse (w_id)
 );
 
-create table if not exists customer (
+create table customer (
   c_id           integer        not null,
   c_d_id         integer        not null,
   c_w_id         integer        not null,
@@ -56,7 +56,7 @@ create table if not exists customer (
 );
 
 -- No PK necessary for this table.
-create table if not exists history (
+create table history (
   h_c_id   integer,
   h_c_d_id integer,
   h_c_w_id integer,
@@ -69,7 +69,7 @@ create table if not exists history (
   foreign key (h_w_id, h_d_id) references district (d_w_id, d_id)
 );
 
-create table if not exists "order" (
+create table "order" (
   o_id         integer      not null,
   o_d_id       integer      not null,
   o_w_id       integer      not null,
@@ -82,7 +82,7 @@ create table if not exists "order" (
   foreign key (o_w_id, o_d_id, o_c_id) references customer (c_w_id, c_d_id, c_id)
 );
 
-create table if not exists new_order (
+create table new_order (
   no_o_id  integer   not null,
   no_d_id  integer   not null,
   no_w_id  integer   not null,
@@ -90,7 +90,7 @@ create table if not exists new_order (
   foreign key (no_w_id, no_d_id, no_o_id) references "order" (o_w_id, o_d_id, o_id)
 );
 
-create table if not exists item (
+create table item (
   i_id     integer      not null,
   i_im_id  integer,
   i_name   varchar(24),
@@ -99,7 +99,7 @@ create table if not exists item (
   primary key (i_id)
 );
 
-create table if not exists stock (
+create table stock (
   s_i_id       integer       not null,
   s_w_id       integer       not null,
   s_quantity   integer,
@@ -122,7 +122,7 @@ create table if not exists stock (
   foreign key (s_i_id) references item (i_id)
 );
 
-create table if not exists order_line (
+create table order_line (
   ol_o_id         integer   not null,
   ol_d_id         integer   not null,
   ol_w_id         integer   not null,
@@ -138,5 +138,5 @@ create table if not exists order_line (
   foreign key (ol_supply_w_id, ol_i_id) references stock (s_w_id, s_i_id)
 );
 
-create index if not exists customer_idx on customer (c_w_id, c_d_id, c_last, c_first);
-create unique index if not exists order_idx on "order" (o_w_id, o_d_id, o_carrier_id, o_id);
+create index customer_idx on customer (c_w_id, c_d_id, c_last, c_first);
+create unique index order_idx on "order" (o_w_id, o_d_id, o_carrier_id, o_id);
