@@ -48,7 +48,7 @@ const badCredit = "BC"
 
 // loadSchema loads the entire TPCC schema into the database.
 func loadSchema(db *sql.DB) {
-	data, err := ioutil.ReadFile("ddls.sql")
+	data, err := ioutil.ReadFile(*ddls)
 	if err != nil {
 		panic(err)
 	}
