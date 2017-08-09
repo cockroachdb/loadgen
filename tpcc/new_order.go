@@ -121,44 +121,48 @@ func (_ newOrder) run(db *sql.DB, w_id int) (interface{}, error) {
 	d.o_entry_d = time.Now()
 
 	err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-		var row *sql.Row
-
 		// Select the warehouse tax rate.
-		row = tx.QueryRow(`SELECT w_tax FROM warehouse WHERE w_id = $1`, w_id)
-		if err := row.Scan(&d.w_tax); err != nil {
+		if err := tx.QueryRow(
+			`SELECT w_tax FROM warehouse WHERE w_id = $1`,
+			w_id,
+		).Scan(&d.w_tax); err != nil {
 			return err
 		}
 
 		// Select the district tax rate and next available order number, bumping it.
-		row = tx.QueryRow(`UPDATE district
-						   SET d_next_o_id = d_next_o_id + 1
-						   WHERE d_w_id = $1 AND d_id = $2
-						   RETURNING d_tax, d_next_o_id`,
-			d.w_id, d.d_id)
 		var d_next_o_id int
-		if err := row.Scan(&d.d_tax, &d_next_o_id); err != nil {
+		if err := tx.QueryRow(`
+				UPDATE district
+				SET d_next_o_id = d_next_o_id + 1
+				WHERE d_w_id = $1 AND d_id = $2
+				RETURNING d_tax, d_next_o_id`,
+			d.w_id, d.d_id,
+		).Scan(&d.d_tax, &d_next_o_id); err != nil {
 			return err
 		}
 
 		d.o_id = d_next_o_id - 1
 
 		// Select the customer's discount, last name and credit.
-		row = tx.QueryRow(`SELECT c_discount, c_last, c_credit
-						   FROM customer
-						   WHERE c_w_id = $1 AND c_d_id = $2 AND c_id = $3`,
-			d.w_id, d.d_id, d.c_id)
-		if err := row.Scan(&d.c_discount, &d.c_last, &d.c_credit); err != nil {
+		if err := tx.QueryRow(`
+				SELECT c_discount, c_last, c_credit
+				FROM customer
+				WHERE c_w_id = $1 AND c_d_id = $2 AND c_id = $3`,
+			d.w_id, d.d_id, d.c_id,
+		).Scan(&d.c_discount, &d.c_last, &d.c_credit); err != nil {
 			return err
 		}
 
 		// Insert row into the orders and new orders table.
-		if _, err := tx.Exec(`INSERT INTO "order" (
-						o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local)
-					   VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		if _, err := tx.Exec(`
+				INSERT INTO "order" (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 			d.o_id, d.d_id, d.w_id, d.c_id, d.o_entry_d, d.o_ol_cnt, all_local); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT INTO new_order (no_o_id, no_d_id, no_w_id) VALUES ($1, $2, $3)`,
+		if _, err := tx.Exec(`
+				INSERT INTO new_order (no_o_id, no_d_id, no_w_id) 
+				VALUES ($1, $2, $3)`,
 			d.o_id, d.d_id, d.w_id); err != nil {
 			return err
 		}
