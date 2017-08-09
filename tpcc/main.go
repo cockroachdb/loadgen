@@ -116,10 +116,7 @@ func main() {
 	var wg sync.WaitGroup
 	workers := make([]*worker, *concurrency)
 	for i := range workers {
-		wg.Add(1)
-		workers[i] = &worker{db: db}
-		workers[i].latency.WindowedHistogram = hdrhistogram.NewWindowed(1,
-			minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
+		workers[i] = newWorker(db, &wg)
 		go workers[i].run(errCh, &wg)
 	}
 
@@ -143,14 +140,20 @@ func main() {
 	defer func() {
 		// Output results that mimic Go's built-in benchmark format.
 		elapsed := time.Since(start)
+		ops := atomic.LoadUint64(&txs[newOrderType].numOps)
 		fmt.Printf("%s\t%8d\t%12.1f ns/op\n",
-			"TPCC", numOps, float64(elapsed.Nanoseconds())/float64(numOps))
+			"TPCC", ops, float64(elapsed.Nanoseconds())/float64(ops))
 	}()
 
 	cumLatency := hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
+	cumLatencyByOp := make([]*hdrhistogram.Histogram, nTxTypes)
+	for i := newOrderType; i <= stockLevelType; i++ {
+		cumLatencyByOp[i] = hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
+	}
 
 	lastNow := time.Now()
 	var lastOps uint64
+	lastOpsByOp := make([]uint64, nTxTypes)
 	for i := 0; ; {
 		select {
 		case err := <-errCh:
@@ -164,40 +167,67 @@ func main() {
 
 		case <-tick:
 			var h *hdrhistogram.Histogram
+			hByOp := make([]*hdrhistogram.Histogram, nTxTypes)
+			tmp := make([]*hdrhistogram.Histogram, nTxTypes)
 			for _, w := range workers {
 				w.latency.Lock()
 				m := w.latency.Merge()
 				w.latency.Rotate()
+				for i, l := range w.latency.byOp {
+					tmp[i] = l.Merge()
+					l.Rotate()
+				}
 				w.latency.Unlock()
 				if h == nil {
 					h = m
 				} else {
 					h.Merge(m)
 				}
+				for i, l := range tmp {
+					if hByOp[i] == nil {
+						hByOp[i] = l
+					} else {
+						hByOp[i].Merge(l)
+					}
+				}
+			}
+
+			for i, h := range hByOp {
+				cumLatencyByOp[i].Merge(h)
 			}
 
 			cumLatency.Merge(h)
-			p50 := h.ValueAtQuantile(50)
-			p95 := h.ValueAtQuantile(95)
-			p99 := h.ValueAtQuantile(99)
-			pMax := h.ValueAtQuantile(100)
-
 			now := time.Now()
 			elapsed := now.Sub(lastNow)
-			ops := atomic.LoadUint64(&numOps)
+			ops := numOps
 			if i%20 == 0 {
-				fmt.Println("_elapsed___errors__ops/sec(inst)___ops/sec(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+				fmt.Println("_time______opName__ops/s(inst)__ops/s(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
 			}
 			i++
-			fmt.Printf("%8s %8d %14.1f %14.1f %8.1f %8.1f %8.1f %8.1f\n",
+			fmt.Printf("%5s %11s %11.1f %10.1f %8.1f %8.1f %8.1f %8.1f\n",
 				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
-				numErr,
+				"all",
 				float64(ops-lastOps)/elapsed.Seconds(),
 				float64(ops)/time.Since(start).Seconds(),
-				time.Duration(p50).Seconds()*1000,
-				time.Duration(p95).Seconds()*1000,
-				time.Duration(p99).Seconds()*1000,
-				time.Duration(pMax).Seconds()*1000)
+				time.Duration(h.ValueAtQuantile(50)).Seconds()*1000,
+				time.Duration(h.ValueAtQuantile(95)).Seconds()*1000,
+				time.Duration(h.ValueAtQuantile(99)).Seconds()*1000,
+				time.Duration(h.ValueAtQuantile(100)).Seconds()*1000)
+
+			for i, h := range hByOp {
+				cumLatencyByOp[i].Merge(h)
+				ops := atomic.LoadUint64(&txs[i].numOps)
+				fmt.Printf("%17s %11.1f %10.1f %8.1f %8.1f %8.1f %8.1f\n",
+					txs[i].name,
+					float64(ops-lastOpsByOp[i])/elapsed.Seconds(),
+					float64(ops)/time.Since(start).Seconds(),
+					time.Duration(h.ValueAtQuantile(50)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(95)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(99)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(100)).Seconds()*1000)
+				lastOpsByOp[i] = ops
+			}
+
 			lastOps = ops
 			lastNow = now
 
@@ -210,23 +240,17 @@ func main() {
 				cumLatency.Merge(m)
 			}
 
-			avg := cumLatency.Mean()
-			p50 := cumLatency.ValueAtQuantile(50)
-			p95 := cumLatency.ValueAtQuantile(95)
-			p99 := cumLatency.ValueAtQuantile(99)
-			pMax := cumLatency.ValueAtQuantile(100)
-
-			ops := atomic.LoadUint64(&numOps)
+			ops := atomic.LoadUint64(&txs[newOrderType].numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___errors_____ops(total)___ops/sec(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
-			fmt.Printf("%7.1fs %8d %14d %14.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
-				time.Since(start).Seconds(), numErr,
+			fmt.Println("\n_elapsed___newOrders___tpmC(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+			fmt.Printf("%7.1fs %11d %11.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
+				time.Since(start).Seconds(),
 				ops, float64(ops)/elapsed,
-				time.Duration(avg).Seconds()*1000,
-				time.Duration(p50).Seconds()*1000,
-				time.Duration(p95).Seconds()*1000,
-				time.Duration(p99).Seconds()*1000,
-				time.Duration(pMax).Seconds()*1000)
+				time.Duration(cumLatencyByOp[newOrderType].Mean()).Seconds()*1000,
+				time.Duration(cumLatencyByOp[newOrderType].ValueAtQuantile(50)).Seconds()*1000,
+				time.Duration(cumLatencyByOp[newOrderType].ValueAtQuantile(95)).Seconds()*1000,
+				time.Duration(cumLatencyByOp[newOrderType].ValueAtQuantile(99)).Seconds()*1000,
+				time.Duration(cumLatencyByOp[newOrderType].ValueAtQuantile(100)).Seconds()*1000)
 			return
 		}
 	}

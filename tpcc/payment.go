@@ -76,10 +76,6 @@ type payment struct{}
 
 var _ tpccTx = payment{}
 
-func (_ payment) weight() int {
-	return paymentWeight
-}
-
 func (_ payment) run(db *sql.DB, w_id int) (interface{}, error) {
 	d := paymentData{
 		d_id: rand.Intn(10) + 1,

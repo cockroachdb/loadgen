@@ -31,6 +31,7 @@ type worker struct {
 	latency struct {
 		sync.Mutex
 		*hdrhistogram.WindowedHistogram
+		byOp []*hdrhistogram.WindowedHistogram
 	}
 }
 
@@ -44,27 +45,51 @@ func clampLatency(d, min, max time.Duration) time.Duration {
 	return d
 }
 
-// These should add to 100. They're percent likelihoods that each transaction
-// type is run. They match the TPCC spec - so probably don't tune these.
+type txType int
+
 const (
-	newOrderWeight    = 45
-	paymentWeight     = 43
-	orderStatusWeight = 4
-	deliveryWeight    = 4
-	stockLevelWeight  = 4
+	newOrderType txType = iota
+	paymentType
+	orderStatusType
+	deliveryType
+	stockLevelType
 )
+
+const nTxTypes = 5
 
 type tpccTx interface {
 	run(db *sql.DB, w_id int) (interface{}, error)
-	weight() int
 }
 
-var txs = []tpccTx{
-	payment{},
-	orderStatus{},
-	delivery{},
-	stockLevel{},
-	newOrder{},
+type tx struct {
+	tpccTx
+	weight int    // percent likelihood that each transaction type is run
+	name   string // display name
+	numOps uint64
+}
+
+// The weights should add to 100. They match the TPCC spec - so probably don't tune these.
+// Keep this in the same order
+var txs = []tx{
+	newOrderType:    {tpccTx: newOrder{}, weight: 45, name: "tpmC (newOrder)"},
+	paymentType:     {tpccTx: payment{}, weight: 43, name: "payment"},
+	orderStatusType: {tpccTx: orderStatus{}, weight: 4, name: "orderStatus"},
+	deliveryType:    {tpccTx: delivery{}, weight: 4, name: "delivery"},
+	stockLevelType:  {tpccTx: stockLevel{}, weight: 4, name: "stockLevel"},
+}
+
+func newWorker(db *sql.DB, wg *sync.WaitGroup) *worker {
+	wg.Add(1)
+	w := &worker{db: db}
+	w.latency.WindowedHistogram = hdrhistogram.NewWindowed(1,
+		minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
+
+	w.latency.byOp = make([]*hdrhistogram.WindowedHistogram, nTxTypes)
+	for i := 0; i < nTxTypes; i++ {
+		w.latency.byOp[i] = hdrhistogram.NewWindowed(1,
+			minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
+	}
+	return w
 }
 
 func (w *worker) run(errCh chan<- error, wg *sync.WaitGroup) {
@@ -72,15 +97,15 @@ func (w *worker) run(errCh chan<- error, wg *sync.WaitGroup) {
 		start := time.Now()
 		transactionType := rand.Intn(100)
 		weightTotal := 0
-		var tx tpccTx
-		for i := range txs {
-			tx = txs[i]
-			weightTotal += tx.weight()
+		var i int
+		var t tx
+		for i, t = range txs {
+			weightTotal += t.weight
 			if transactionType < weightTotal {
 				break
 			}
 		}
-		if _, err := tx.run(w.db, rand.Intn(*warehouses)); err != nil {
+		if _, err := t.run(w.db, rand.Intn(*warehouses)); err != nil {
 			errCh <- err
 			continue
 		}
@@ -89,7 +114,11 @@ func (w *worker) run(errCh chan<- error, wg *sync.WaitGroup) {
 		if err := w.latency.Current.RecordValue(elapsed); err != nil {
 			log.Fatal(err)
 		}
+		if err := w.latency.byOp[i].Current.RecordValue(elapsed); err != nil {
+			log.Fatal(err)
+		}
 		w.latency.Unlock()
+		atomic.AddUint64(&txs[i].numOps, 1)
 		v := atomic.AddUint64(&numOps, 1)
 		if *maxOps > 0 && v >= *maxOps {
 			return
