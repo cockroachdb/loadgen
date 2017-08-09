@@ -1,5 +1,3 @@
--- TODO(jordan): put "if not exists" behind a flag since it's non-standard
--- SQL - we'd like to be able to run this against pg as well.
 create database if not exists tpcc;
 
 create table if not exists warehouse (

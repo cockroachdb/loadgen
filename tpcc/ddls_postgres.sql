@@ -1,6 +1,4 @@
--- TODO(jordan): put "if not exists" behind a flag since it's non-standard
--- SQL - we'd like to be able to run this against pg as well.
---create database tpcc;
+-- Need to run CREATE DATABASE tpcc by hand first.
 
 create table warehouse (
   w_id        integer   not null primary key,
