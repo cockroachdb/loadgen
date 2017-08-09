@@ -83,19 +83,20 @@ func (_ orderStatus) run(db *sql.DB, w_id int) (interface{}, error) {
 		if d.c_id != 0 {
 			// Case 1: select by customer id
 			if err := tx.QueryRow(`
-				SELECT c_balance, c_first, c_middle, c_last
-				FROM customer
-				WHERE c_w_id = $1 AND c_d_id = $2 AND c_id = $3`,
-				w_id, d.d_id, d.c_id).Scan(&d.c_balance, &d.c_first, &d.c_middle, &d.c_last); err != nil {
+					SELECT c_balance, c_first, c_middle, c_last
+					FROM customer
+					WHERE c_w_id = $1 AND c_d_id = $2 AND c_id = $3`,
+				w_id, d.d_id, d.c_id,
+			).Scan(&d.c_balance, &d.c_first, &d.c_middle, &d.c_last); err != nil {
 				return errors.Wrap(err, "select by customer idfail")
 			}
 		} else {
 			// Case 2: Pick the middle row, rounded up, from the selection by last name.
 			rows, err := tx.Query(`
-				SELECT c_id, c_balance, c_first, c_middle
-				FROM customer
-				WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
-				ORDER BY c_first ASC`,
+					SELECT c_id, c_balance, c_first, c_middle
+					FROM customer
+					WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
+					ORDER BY c_first ASC`,
 				w_id, d.d_id, d.c_last)
 			if err != nil {
 				return errors.Wrap(err, "select by last name fail")
@@ -125,25 +126,26 @@ func (_ orderStatus) run(db *sql.DB, w_id int) (interface{}, error) {
 
 		// Select the customer's order.
 		if err := tx.QueryRow(`
-			SELECT o_id, o_entry_d, o_carrier_id
-			FROM "order"
-			WHERE o_w_id = $1 AND o_d_id = $2 AND o_c_id = $3
-			ORDER BY o_id DESC
-			LIMIT 1`,
-			w_id, d.d_id, d.c_id).Scan(
-			&d.o_id, &d.o_entry_d, &d.o_carrier_id); err != nil {
+				SELECT o_id, o_entry_d, o_carrier_id
+				FROM "order"
+				WHERE o_w_id = $1 AND o_d_id = $2 AND o_c_id = $3
+				ORDER BY o_id DESC
+				LIMIT 1`,
+			w_id, d.d_id, d.c_id,
+		).Scan(&d.o_id, &d.o_entry_d, &d.o_carrier_id); err != nil {
 			return errors.Wrap(err, "select order fail")
 		}
 
 		// Select the items from the customer's order.
 		rows, err := tx.Query(`
-			SELECT ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_delivery_d
-			FROM order_line
-			WHERE ol_w_id = $1 AND ol_d_id = $2 AND ol_o_id = $3`,
+				SELECT ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_delivery_d
+				FROM order_line
+				WHERE ol_w_id = $1 AND ol_d_id = $2 AND ol_o_id = $3`,
 			w_id, d.d_id, d.o_id)
 		if err != nil {
 			return errors.Wrap(err, "select items fail")
 		}
+		defer rows.Close()
 
 		// On average there's 10 items per order - 2.4.1.3
 		d.items = make([]orderItem, 0, 10)
