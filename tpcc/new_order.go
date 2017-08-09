@@ -177,7 +177,7 @@ func (_ newOrder) run(db *sql.DB, w_id int) (interface{}, error) {
 				(CASE s_quantity >= $1 + 10 WHEN true THEN s_quantity-$1 ELSE (s_quantity-$1)+91 END,
 				 s_ytd + $1,
 				 s_order_cnt + 1,
-				 s_remote_cnt + (CASE $2 WHEN true THEN 1 ELSE 0 END))
+				 s_remote_cnt + (CASE $2::bool WHEN true THEN 1 ELSE 0 END))
 			WHERE s_i_id=$3 AND s_w_id=$4
 			RETURNING s_dist_%02d, s_data`, d.d_id))
 		if err != nil {
