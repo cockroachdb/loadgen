@@ -116,10 +116,7 @@ func main() {
 	var wg sync.WaitGroup
 	workers := make([]*worker, *concurrency)
 	for i := range workers {
-		wg.Add(1)
-		workers[i] = &worker{db: db}
-		workers[i].latency.WindowedHistogram = hdrhistogram.NewWindowed(1,
-			minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
+		workers[i] = newWorker(db, &wg)
 		go workers[i].run(errCh, &wg)
 	}
 
@@ -148,6 +145,10 @@ func main() {
 	}()
 
 	cumLatency := hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
+	cumLatencyByOp := make(map[txType]*hdrhistogram.Histogram)
+	for i := newOrderType; i <= stockLevelType; i++ {
+		cumLatencyByOp[i] = hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
+	}
 
 	lastNow := time.Now()
 	var lastOps uint64
@@ -164,15 +165,28 @@ func main() {
 
 		case <-tick:
 			var h *hdrhistogram.Histogram
+			hByOp := make([]*hdrhistogram.Histogram, nTxTypes)
+			tmp := make([]*hdrhistogram.Histogram, nTxTypes)
 			for _, w := range workers {
 				w.latency.Lock()
 				m := w.latency.Merge()
 				w.latency.Rotate()
+				for i, l := range w.latency.byOp {
+					tmp[i] = l.Merge()
+					l.Rotate()
+				}
 				w.latency.Unlock()
 				if h == nil {
 					h = m
 				} else {
 					h.Merge(m)
+				}
+				for i, l := range tmp {
+					if hByOp[i] == nil {
+						hByOp[i] = l
+					} else {
+						hByOp[i].Merge(l)
+					}
 				}
 			}
 
@@ -184,14 +198,13 @@ func main() {
 
 			now := time.Now()
 			elapsed := now.Sub(lastNow)
-			ops := atomic.LoadUint64(&numOps)
+			ops := atomic.LoadUint64(&txs[newOrderType].numOps)
 			if i%20 == 0 {
-				fmt.Println("_elapsed___errors__ops/sec(inst)___ops/sec(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+				fmt.Println("_elapsed___tpmC(inst)___tpmC(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
 			}
 			i++
-			fmt.Printf("%8s %8d %14.1f %14.1f %8.1f %8.1f %8.1f %8.1f\n",
+			fmt.Printf("%8s %14.1f %14.1f %8.1f %8.1f %8.1f %8.1f\n",
 				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
-				numErr,
 				float64(ops-lastOps)/elapsed.Seconds(),
 				float64(ops)/time.Since(start).Seconds(),
 				time.Duration(p50).Seconds()*1000,
@@ -216,11 +229,11 @@ func main() {
 			p99 := cumLatency.ValueAtQuantile(99)
 			pMax := cumLatency.ValueAtQuantile(100)
 
-			ops := atomic.LoadUint64(&numOps)
+			ops := atomic.LoadUint64(&txs[newOrderType].numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___errors_____ops(total)___ops/sec(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
-			fmt.Printf("%7.1fs %8d %14d %14.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
-				time.Since(start).Seconds(), numErr,
+			fmt.Println("\n_elapsed___errors_____ops(total)___tpmC(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+			fmt.Printf("%7.1fs %14d %14.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
+				time.Since(start).Seconds(),
 				ops, float64(ops)/elapsed,
 				time.Duration(avg).Seconds()*1000,
 				time.Duration(p50).Seconds()*1000,

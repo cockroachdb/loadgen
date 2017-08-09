@@ -75,10 +75,6 @@ type newOrder struct{}
 
 var _ tpccTx = newOrder{}
 
-func (_ newOrder) weight() int {
-	return newOrderWeight
-}
-
 func (_ newOrder) run(db *sql.DB, w_id int) (interface{}, error) {
 	d := newOrderData{
 		w_id:     w_id,

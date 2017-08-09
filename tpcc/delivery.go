@@ -42,10 +42,6 @@ type delivery struct{}
 
 var _ tpccTx = newOrder{}
 
-func (_ delivery) weight() int {
-	return deliveryWeight
-}
-
 func (_ delivery) run(db *sql.DB, w_id int) (interface{}, error) {
 	o_carrier_id := rand.Intn(10) + 1
 	ol_delivery_d := time.Now()

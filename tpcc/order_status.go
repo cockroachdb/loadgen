@@ -59,10 +59,6 @@ type orderStatus struct{}
 
 var _ tpccTx = orderStatus{}
 
-func (_ orderStatus) weight() int {
-	return orderStatusWeight
-}
-
 func (_ orderStatus) run(db *sql.DB, w_id int) (interface{}, error) {
 	d := orderStatusData{
 		d_id: rand.Intn(9) + 1,
