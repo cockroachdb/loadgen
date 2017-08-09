@@ -62,6 +62,7 @@ type tpccTx interface {
 var txs = []tpccTx{
 	payment{},
 	orderStatus{},
+	delivery{},
 	newOrder{}, // newOrder must come last as its the default.
 }
 
