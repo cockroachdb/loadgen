@@ -63,18 +63,19 @@ type tpccTx interface {
 
 type tx struct {
 	tpccTx
-	weight int // percent likelihood that each transaction type is run
+	weight int    // percent likelihood that each transaction type is run
+	name   string // display name
 	numOps uint64
 }
 
 // The weights should add to 100. They match the TPCC spec - so probably don't tune these.
 // Keep this in the same order
 var txs = []tx{
-	newOrderType:    {tpccTx: newOrder{}, weight: 45},
-	paymentType:     {tpccTx: payment{}, weight: 43},
-	orderStatusType: {tpccTx: orderStatus{}, weight: 4},
-	deliveryType:    {tpccTx: delivery{}, weight: 4},
-	stockLevelType:  {tpccTx: stockLevel{}, weight: 4},
+	newOrderType:    {tpccTx: newOrder{}, weight: 45, name: "tpmC (newOrder)"},
+	paymentType:     {tpccTx: payment{}, weight: 43, name: "payment"},
+	orderStatusType: {tpccTx: orderStatus{}, weight: 4, name: "orderStatus"},
+	deliveryType:    {tpccTx: delivery{}, weight: 4, name: "delivery"},
+	stockLevelType:  {tpccTx: stockLevel{}, weight: 4, name: "stockLevel"},
 }
 
 func newWorker(db *sql.DB, wg *sync.WaitGroup) *worker {

@@ -145,13 +145,14 @@ func main() {
 	}()
 
 	cumLatency := hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
-	cumLatencyByOp := make(map[txType]*hdrhistogram.Histogram)
+	cumLatencyByOp := make([]*hdrhistogram.Histogram, nTxTypes)
 	for i := newOrderType; i <= stockLevelType; i++ {
 		cumLatencyByOp[i] = hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
 	}
 
 	lastNow := time.Now()
 	var lastOps uint64
+	lastOpsByOp := make([]uint64, nTxTypes)
 	for i := 0; ; {
 		select {
 		case err := <-errCh:
@@ -198,19 +199,35 @@ func main() {
 
 			now := time.Now()
 			elapsed := now.Sub(lastNow)
-			ops := atomic.LoadUint64(&txs[newOrderType].numOps)
+			ops := numOps
 			if i%20 == 0 {
-				fmt.Println("_elapsed___tpmC(inst)___tpmC(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+				fmt.Println("_time______opName__tpmC(inst)__tpmC(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
 			}
 			i++
-			fmt.Printf("%8s %14.1f %14.1f %8.1f %8.1f %8.1f %8.1f\n",
+			fmt.Printf("%5s %11s %11.1f %10.1f %8.1f %8.1f %8.1f %8.1f\n",
 				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
+				"all",
 				float64(ops-lastOps)/elapsed.Seconds(),
 				float64(ops)/time.Since(start).Seconds(),
 				time.Duration(p50).Seconds()*1000,
 				time.Duration(p95).Seconds()*1000,
 				time.Duration(p99).Seconds()*1000,
 				time.Duration(pMax).Seconds()*1000)
+
+			for i, h := range hByOp {
+				cumLatencyByOp[i].Merge(h)
+				ops := atomic.LoadUint64(&txs[i].numOps)
+				fmt.Printf("%17s %11.1f %10.1f %8.1f %8.1f %8.1f %8.1f\n",
+					txs[i].name,
+					float64(ops-lastOpsByOp[i])/elapsed.Seconds(),
+					float64(ops)/time.Since(start).Seconds(),
+					time.Duration(h.ValueAtQuantile(50)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(95)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(99)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(100)).Seconds()*1000)
+				lastOpsByOp[i] = ops
+			}
+
 			lastOps = ops
 			lastNow = now
 
@@ -231,8 +248,8 @@ func main() {
 
 			ops := atomic.LoadUint64(&txs[newOrderType].numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___errors_____ops(total)___tpmC(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
-			fmt.Printf("%7.1fs %14d %14.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
+			fmt.Println("\n_elapsed___ops(total)___tpmC(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+			fmt.Printf("%7.1fs %12d %14.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
 				time.Since(start).Seconds(),
 				ops, float64(ops)/elapsed,
 				time.Duration(avg).Seconds()*1000,
