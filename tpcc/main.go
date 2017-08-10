@@ -201,7 +201,7 @@ func main() {
 			elapsed := now.Sub(lastNow)
 			ops := numOps
 			if i%20 == 0 {
-				fmt.Println("_time______opName__tpmC(inst)__tpmC(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+				fmt.Println("_time______opName__ops/s(inst)__ops/s(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
 			}
 			i++
 			fmt.Printf("%5s %11s %11.1f %10.1f %8.1f %8.1f %8.1f %8.1f\n",
@@ -248,7 +248,7 @@ func main() {
 
 			ops := atomic.LoadUint64(&txs[newOrderType].numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___ops(total)___tpmC(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+			fmt.Println("\n_elapsed___ops(total)___ops/s(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
 			fmt.Printf("%7.1fs %12d %14.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
 				time.Since(start).Seconds(),
 				ops, float64(ops)/elapsed,
