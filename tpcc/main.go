@@ -39,6 +39,7 @@ var drop = flag.Bool("drop", false, "Drop the database and recreate")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
 var load = flag.Bool("load", false, "Generate fresh TPCC data. Use with -drop")
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of operations to run")
+var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just tpmC")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
 var warehouses = flag.Int("warehouses", 1, "number of warehouses for loading")
@@ -204,27 +205,33 @@ func main() {
 				fmt.Println("_time______opName__ops/s(inst)__ops/s(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
 			}
 			i++
-			fmt.Printf("%5s %11s %11.1f %10.1f %8.1f %8.1f %8.1f %8.1f\n",
-				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
-				"all",
-				float64(ops-lastOps)/elapsed.Seconds(),
-				float64(ops)/time.Since(start).Seconds(),
-				time.Duration(h.ValueAtQuantile(50)).Seconds()*1000,
-				time.Duration(h.ValueAtQuantile(95)).Seconds()*1000,
-				time.Duration(h.ValueAtQuantile(99)).Seconds()*1000,
-				time.Duration(h.ValueAtQuantile(100)).Seconds()*1000)
-
-			for i, h := range hByOp {
-				cumLatencyByOp[i].Merge(h)
-				ops := atomic.LoadUint64(&txs[i].numOps)
-				fmt.Printf("%17s %11.1f %10.1f %8.1f %8.1f %8.1f %8.1f\n",
-					txs[i].name,
-					float64(ops-lastOpsByOp[i])/elapsed.Seconds(),
+			totalTime := time.Duration(time.Since(start).Seconds()+0.5) * time.Second
+			if *opsStats {
+				fmt.Printf("%5s %11s %12.1f %11.1f %8.1f %8.1f %8.1f %8.1f\n",
+					totalTime,
+					"all",
+					float64(ops-lastOps)/elapsed.Seconds(),
 					float64(ops)/time.Since(start).Seconds(),
 					time.Duration(h.ValueAtQuantile(50)).Seconds()*1000,
 					time.Duration(h.ValueAtQuantile(95)).Seconds()*1000,
 					time.Duration(h.ValueAtQuantile(99)).Seconds()*1000,
 					time.Duration(h.ValueAtQuantile(100)).Seconds()*1000)
+			}
+
+			for i, h := range hByOp {
+				cumLatencyByOp[i].Merge(h)
+				ops := atomic.LoadUint64(&txs[i].numOps)
+				if *opsStats || txType(i) == newOrderType {
+					fmt.Printf("%5s %11s %12.1f %11.1f %8.1f %8.1f %8.1f %8.1f\n",
+						totalTime,
+						txs[i].name,
+						float64(ops-lastOpsByOp[i])/elapsed.Seconds(),
+						float64(ops)/time.Since(start).Seconds(),
+						time.Duration(h.ValueAtQuantile(50)).Seconds()*1000,
+						time.Duration(h.ValueAtQuantile(95)).Seconds()*1000,
+						time.Duration(h.ValueAtQuantile(99)).Seconds()*1000,
+						time.Duration(h.ValueAtQuantile(100)).Seconds()*1000)
+				}
 				lastOpsByOp[i] = ops
 			}
 

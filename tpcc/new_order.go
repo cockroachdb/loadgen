@@ -187,19 +187,26 @@ func (_ newOrder) run(db *sql.DB, w_id int) (interface{}, error) {
 		}
 
 		var i_data string
-		// For each o_ol_cnt item in the order (2.4.2.2)
+		// 2.4.2.2: For each o_ol_cnt item in the order, query the relevant item
+		// row, update the stock row to account for the order, and insert a new
+		// line into the order_line table to reflect the item on the order.
 		for i, item := range d.items {
 			if err := selectItem.QueryRow(item.ol_i_id).Scan(&item.i_price, &item.i_name, &i_data); err != nil {
 				if rollback && item.ol_i_id < 0 {
-					// 2.4.2.3: roll back when we're expecting a rollback due to simulated user
-					// error (invalid item id) and we actually can't find the item.
+					// 2.4.2.3: roll back when we're expecting a rollback due to
+					// simulated user error (invalid item id) and we actually
+					// can't find the item. The spec requires us to actually go
+					// to the database for this, even though we know earlier
+					// that the item has an invalid number.
 					return simError
 				}
 				return err
 			}
 
 			var dist_info, s_data string
-			if err := updateStock.QueryRow(item.ol_quantity, item.remoteWarehouse, item.ol_i_id, item.ol_supply_w_id).Scan(&dist_info, &s_data); err != nil {
+			if err := updateStock.QueryRow(
+				item.ol_quantity, item.remoteWarehouse, item.ol_i_id, item.ol_supply_w_id,
+			).Scan(&dist_info, &s_data); err != nil {
 				return err
 			}
 			if strings.Contains(s_data, originalString) && strings.Contains(i_data, originalString) {
@@ -214,7 +221,7 @@ func (_ newOrder) run(db *sql.DB, w_id int) (interface{}, error) {
 				d.o_id, // ol_o_id
 				d.d_id,
 				d.w_id,
-				i+1, // ol_number is a unique number among items that share an ol_o_id
+				i+1, // ol_number is a counter over the items in the order.
 				item.ol_i_id,
 				item.ol_supply_w_id,
 				item.ol_quantity,

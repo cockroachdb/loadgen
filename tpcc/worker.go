@@ -68,10 +68,11 @@ type tx struct {
 	numOps uint64
 }
 
-// The weights should add to 100. They match the TPCC spec - so probably don't tune these.
-// Keep this in the same order
+// The weights should add to 100. They match the TPCC spec - so probably don't
+// tune these. Keep this in the same order as the const type enum above, since
+// it's used as a map from tx type to struct.
 var txs = []tx{
-	newOrderType:    {tpccTx: newOrder{}, weight: 45, name: "tpmC (newOrder)"},
+	newOrderType:    {tpccTx: newOrder{}, weight: 45, name: "tpmC"},
 	paymentType:     {tpccTx: payment{}, weight: 43, name: "payment"},
 	orderStatusType: {tpccTx: orderStatus{}, weight: 4, name: "orderStatus"},
 	deliveryType:    {tpccTx: delivery{}, weight: 4, name: "delivery"},
