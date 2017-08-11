@@ -32,9 +32,17 @@ var cLastTokens = [...]string{
 // It's used for the non-uniform random generator.
 var cLoad int
 
+// cCustomerID is the value of C for the customer id generator. 2.1.6.
+var cCustomerID int
+
+// cCustomerID is the value of C for the item id generator. 2.1.6.
+var cItemID int
+
 func init() {
 	rand.Seed(time.Now().UnixNano())
 	cLoad = rand.Intn(256)
+	cItemID = rand.Intn(1024)
+	cCustomerID = rand.Intn(8192)
 }
 
 func randStringFromAlphabet(minLen, maxLen int, alphabet string) string {
@@ -66,7 +74,7 @@ func randOriginalString() string {
 	if rand.Intn(9) == 0 {
 		l := randInt(26, 50)
 		off := randInt(0, l-8)
-		return randAString(off, off) + "ORIGINAL" + randAString(l-off-8, l-off-8)
+		return randAString(off, off) + originalString + randAString(l-off-8, l-off-8)
 	} else {
 		return randAString(26, 50)
 	}
@@ -114,4 +122,14 @@ func randCLastSyllables(n int) string {
 // See 4.3.2.3.
 func randCLast() string {
 	return randCLastSyllables(((rand.Intn(256) | rand.Intn(1000)) + cLoad) % 1000)
+}
+
+// Return a non-uniform random customer ID. See 2.1.6.
+func randCustomerID() int {
+	return ((rand.Intn(1024) | (rand.Intn(3000) + 1) + cCustomerID) % 3000) + 1
+}
+
+// Return a non-uniform random item ID. See 2.1.6.
+func randItemID() int {
+	return ((rand.Intn(8190) | (rand.Intn(100000) + 1) + cItemID) % 100000) + 1
 }
