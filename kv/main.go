@@ -62,9 +62,6 @@ var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error"
 
 var maxRate = flag.Float64("max-rate", 0, "Maximum frequency of operations (reads/writes). If 0, no limit.")
 
-// outputInterval = interval at which information is output to console.
-var outputInterval = flag.Duration("output-interval", 1*time.Second, "Interval of output")
-
 // Minimum and maximum size of inserted blocks.
 var minBlockSizeBytes = flag.Int("min-block-bytes", 1, "Minimum amount of raw data written with each insertion")
 var maxBlockSizeBytes = flag.Int("max-block-bytes", 2, "Maximum amount of raw data written with each insertion")
@@ -590,7 +587,7 @@ func main() {
 	}
 
 	var numErr int
-	tick := time.Tick(*outputInterval)
+	tick := time.Tick(time.Second)
 	done := make(chan os.Signal, 3)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
 
