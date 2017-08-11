@@ -35,7 +35,6 @@ var cLoad int
 // cCustomerID is the value of C for the customer id generator. 2.1.6.
 var cCustomerID int
 
-//
 // cCustomerID is the value of C for the item id generator. 2.1.6.
 var cItemID int
 

@@ -34,7 +34,6 @@ import (
 )
 
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of concurrent writers inserting blocks")
-var ddls = flag.String("ddls", "ddls.sql", "which ddls file to load")
 var drop = flag.Bool("drop", false, "Drop the database and recreate")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
 var load = flag.Bool("load", false, "Generate fresh TPCC data. Use with -drop")
@@ -43,9 +42,6 @@ var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, no
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
 var warehouses = flag.Int("warehouses", 1, "number of warehouses for loading")
-
-// outputInterval = interval at which information is output to console.
-var outputInterval = flag.Duration("output-interval", 1*time.Second, "Interval of output")
 
 const (
 	minLatency = 100 * time.Microsecond
@@ -103,7 +99,11 @@ func main() {
 
 	if *drop {
 		if _, err := db.Exec("DROP DATABASE tpcc"); err != nil {
-			panic(err)
+			fmt.Println("couldn't drop database:", err)
+		}
+		if _, err := db.Exec("CREATE DATABASE tpcc"); err != nil {
+			fmt.Println("couldn't recreate database:", err)
+			os.Exit(1)
 		}
 	}
 
@@ -122,7 +122,7 @@ func main() {
 	}
 
 	var numErr int
-	tick := time.Tick(*outputInterval)
+	tick := time.Tick(time.Second)
 	done := make(chan os.Signal, 3)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
 

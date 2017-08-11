@@ -85,8 +85,8 @@ func (_ delivery) run(db *sql.DB, w_id int) (interface{}, error) {
 		}
 		updateCustomer, err := tx.Prepare(`
 			UPDATE customer
-			SET (C_BALANCE, C_DELIVERY_CNT) =
-				(C_BALANCE + $1, C_DELIVERY_CNT + 1)
+			SET (c_balance, c_delivery_cnt) =
+				(c_balance + $1, c_delivery_cnt + 1)
 			WHERE c_w_id = $2 AND c_d_id = $3 AND c_id = $4`)
 		if err != nil {
 			return err
@@ -97,7 +97,9 @@ func (_ delivery) run(db *sql.DB, w_id int) (interface{}, error) {
 			var o_id int
 			if err := getNewOrder.QueryRow(w_id, d_id).Scan(&o_id); err != nil {
 				// If no matching order is found, the delivery of this order is skipped.
-				// TODO(jordan): make sure the error is a not-found
+				if err != sql.ErrNoRows {
+					return err
+				}
 				continue
 			}
 			if _, err := delNewOrder.Exec(w_id, d_id, o_id); err != nil {

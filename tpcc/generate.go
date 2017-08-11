@@ -18,9 +18,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"io/ioutil"
 	"math/rand"
-	"strings"
 	"sync"
 	"time"
 )
@@ -45,20 +43,6 @@ const paymentCount = 1
 const deliveryCount = 0
 const goodCredit = "GC"
 const badCredit = "BC"
-
-// loadSchema loads the entire TPCC schema into the database.
-func loadSchema(db *sql.DB) {
-	data, err := ioutil.ReadFile(*ddls)
-	if err != nil {
-		panic(err)
-	}
-	stmts := strings.Split(string(data), ";")
-	for _, stmt := range stmts {
-		if _, err := db.Exec(stmt); err != nil {
-			panic(err)
-		}
-	}
-}
 
 func prepare(db *sql.DB, query string) *sql.Stmt {
 	stmt, err := db.Prepare(query)

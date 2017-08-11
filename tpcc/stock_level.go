@@ -69,7 +69,7 @@ func (_ stockLevel) run(db *sql.DB, w_id int) (interface{}, error) {
 		// Count the number of recently sold items that have a stock level below
 		// the threshold.
 		if err := tx.QueryRow(`
-				SELECT COUNT( DISTINCT (s_i_id))
+				SELECT COUNT(DISTINCT(s_i_id))
 				FROM order_line
 				JOIN stock
 				ON s_i_id=ol_i_id
