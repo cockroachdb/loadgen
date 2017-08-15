@@ -34,6 +34,7 @@ test:
 
 .PHONY: deps
 deps:
+	$(GO) get -u github.com/kisielk/errcheck
 	$(GO) get -d -t ./...
 
 .PHONY: build
@@ -46,6 +47,10 @@ kv:
 .PHONY: ycsb
 ycsb:
 	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o ycsb/ycsb ./ycsb
+
+.PHONY: tpcc
+tpcc:
+	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o tpch/tpcc ./tpcc
 
 .PHONY: tpch
 tpch:
@@ -72,4 +77,4 @@ check:
 	@echo "gofmt (simplify)"
 	@! gofmt -s -d -l . 2>&1 | grep -vE '^\.git/'
 	@echo "goimports"
-	@! goimports -l . | grep -vF 'No Exceptions'
+	@! goimports -l . | grep -vF 'No Exceptions'k
