@@ -47,6 +47,10 @@ kv:
 ycsb:
 	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o ycsb/ycsb ./ycsb
 
+.PHONY: tpcc
+tpcc:
+	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o tpch/tpcc ./tpcc
+
 .PHONY: tpch
 tpch:
 	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o tpch/tpch ./tpch
