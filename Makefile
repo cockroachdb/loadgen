@@ -34,22 +34,15 @@ test:
 
 .PHONY: deps
 deps:
+	$(GO) get -u github.com/kisielk/errcheck
 	$(GO) get -d -t ./...
 
 .PHONY: build
-build: deps kv ycsb
+build: deps kv ycsb tpcc tpch
 
-.PHONY: kv
-kv:
-	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o kv/kv ./kv
-
-.PHONY: ycsb
-ycsb:
-	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o ycsb/ycsb ./ycsb
-
-.PHONY: tpch
-tpch:
-	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o tpch/tpch ./tpch
+.PHONY: kv ycsb tpcc tpch
+kv ycsb tpcc tpch:
+	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o $@/$@ ./$@
 
 .PHONY: check
 check:
