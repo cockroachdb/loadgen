@@ -1,0 +1,33 @@
+required = [
+ "github.com/golang/lint/golint",
+ "github.com/kisielk/errcheck",
+ "golang.org/x/tools/cmd/goimports",
+]
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/cockroachdb/cockroach-go"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/gocql/gocql"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/lib/pq"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/pkg/errors"
+
+[[constraint]]
+  branch = "master"
+  name = "golang.org/x/net"
+
+[[constraint]]
+  branch = "master"
+  name = "golang.org/x/time"
+
+[[constraint]]
+  branch = "v2"
+  name = "gopkg.in/mgo.v2"
