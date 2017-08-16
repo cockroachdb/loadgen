@@ -35,72 +35,72 @@ import (
 
 type orderStatusData struct {
 	// Return data specified by 2.6.3.3
-	d_id         int
-	c_id         int
-	c_first      string
-	c_middle     string
-	c_last       string
-	c_balance    float64
-	o_id         int
-	o_entry_d    time.Time
-	o_carrier_id sql.NullInt64
+	dID        int
+	cID        int
+	cFirst     string
+	cMiddle    string
+	cLast      string
+	cBalance   float64
+	oID        int
+	oEntryD    time.Time
+	oCarrierID sql.NullInt64
 
 	items []orderItem
 }
 
 type customerData struct {
-	c_id      int
-	c_balance float64
-	c_first   string
-	c_middle  string
+	cID      int
+	cBalance float64
+	cFirst   string
+	cMiddle  string
 }
 
 type orderStatus struct{}
 
 var _ tpccTx = orderStatus{}
 
-func (_ orderStatus) run(db *sql.DB, w_id int) (interface{}, error) {
+func (o orderStatus) run(db *sql.DB, wID int) (interface{}, error) {
 	d := orderStatusData{
-		d_id: rand.Intn(9) + 1,
+		dID: rand.Intn(9) + 1,
 	}
 
 	// 2.6.1.2: The customer is randomly selected 60% of the time by last name
 	// and 40% by number.
 	if rand.Intn(9) < 6 {
-		d.c_last = randCLast()
+		d.cLast = randCLast()
 	} else {
-		d.c_id = randCustomerID()
+		d.cID = randCustomerID()
 	}
 
 	if err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
 		// 2.6.2.2 explains this entire transaction.
 
 		// Select the customer
-		if d.c_id != 0 {
+		if d.cID != 0 {
 			// Case 1: select by customer id
 			if err := tx.QueryRow(`
-					SELECT c_balance, c_first, c_middle, c_last
+					SELECT cBalance, cFirst, cMiddle, cLast
 					FROM customer
-					WHERE c_w_id = $1 AND c_d_id = $2 AND c_id = $3`,
-				w_id, d.d_id, d.c_id,
-			).Scan(&d.c_balance, &d.c_first, &d.c_middle, &d.c_last); err != nil {
+					WHERE cWID = $1 AND cDID = $2 AND cID = $3`,
+				wID, d.dID, d.cID,
+			).Scan(&d.cBalance, &d.cFirst, &d.cMiddle, &d.cLast); err != nil {
 				return errors.Wrap(err, "select by customer idfail")
 			}
 		} else {
 			// Case 2: Pick the middle row, rounded up, from the selection by last name.
 			rows, err := tx.Query(`
-					SELECT c_id, c_balance, c_first, c_middle
+					SELECT cID, cBalance, cFirst, cMiddle
 					FROM customer
-					WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
-					ORDER BY c_first ASC`,
-				w_id, d.d_id, d.c_last)
+					WHERE cWID = $1 AND cDID = $2 AND cLast = $3
+					ORDER BY cFirst ASC`,
+				wID, d.dID, d.cLast)
 			if err != nil {
 				return errors.Wrap(err, "select by last name fail")
 			}
 			customers := make([]customerData, 0, 1)
 			for rows.Next() {
 				c := customerData{}
-				err = rows.Scan(&c.c_id, &c.c_balance, &c.c_first, &c.c_middle)
+				err = rows.Scan(&c.cID, &c.cBalance, &c.cFirst, &c.cMiddle)
 				if err != nil {
 					rows.Close()
 					return err
@@ -110,14 +110,14 @@ func (_ orderStatus) run(db *sql.DB, w_id int) (interface{}, error) {
 			rows.Close()
 			cIdx := len(customers) / 2
 			if len(customers)%2 == 0 {
-				cIdx -= 1
+				cIdx--
 			}
 
 			c := customers[cIdx]
-			d.c_id = c.c_id
-			d.c_balance = c.c_balance
-			d.c_first = c.c_first
-			d.c_middle = c.c_middle
+			d.cID = c.cID
+			d.cBalance = c.cBalance
+			d.cFirst = c.cFirst
+			d.cMiddle = c.cMiddle
 		}
 
 		// Select the customer's order.
@@ -127,8 +127,8 @@ func (_ orderStatus) run(db *sql.DB, w_id int) (interface{}, error) {
 				WHERE o_w_id = $1 AND o_d_id = $2 AND o_c_id = $3
 				ORDER BY o_id DESC
 				LIMIT 1`,
-			w_id, d.d_id, d.c_id,
-		).Scan(&d.o_id, &d.o_entry_d, &d.o_carrier_id); err != nil {
+			wID, d.dID, d.cID,
+		).Scan(&d.oID, &d.oEntryD, &d.oCarrierID); err != nil {
 			return errors.Wrap(err, "select order fail")
 		}
 
@@ -137,7 +137,7 @@ func (_ orderStatus) run(db *sql.DB, w_id int) (interface{}, error) {
 				SELECT ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_delivery_d
 				FROM order_line
 				WHERE ol_w_id = $1 AND ol_d_id = $2 AND ol_o_id = $3`,
-			w_id, d.d_id, d.o_id)
+			wID, d.dID, d.oID)
 		if err != nil {
 			return errors.Wrap(err, "select items fail")
 		}
@@ -147,7 +147,7 @@ func (_ orderStatus) run(db *sql.DB, w_id int) (interface{}, error) {
 		d.items = make([]orderItem, 0, 10)
 		for rows.Next() {
 			item := orderItem{}
-			if err := rows.Scan(&item.ol_i_id, &item.ol_supply_w_id, &item.ol_quantity, &item.ol_amount, &item.ol_delivery_d); err != nil {
+			if err := rows.Scan(&item.olIID, &item.olSupplyWID, &item.olQuantity, &item.olAmount, &item.olDeliveryD); err != nil {
 				return err
 			}
 			d.items = append(d.items, item)

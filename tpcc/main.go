@@ -220,19 +220,19 @@ func main() {
 
 			for i, h := range hByOp {
 				cumLatencyByOp[i].Merge(h)
-				ops := atomic.LoadUint64(&txs[i].numOps)
+				numOpsByOp := atomic.LoadUint64(&txs[i].numOps)
 				if *opsStats || txType(i) == newOrderType {
 					fmt.Printf("%5s %11s %12.1f %11.1f %8.1f %8.1f %8.1f %8.1f\n",
 						totalTime,
 						txs[i].name,
-						float64(ops-lastOpsByOp[i])/elapsed.Seconds(),
-						float64(ops)/time.Since(start).Seconds(),
+						float64(numOpsByOp-lastOpsByOp[i])/elapsed.Seconds(),
+						float64(numOpsByOp)/time.Since(start).Seconds(),
 						time.Duration(h.ValueAtQuantile(50)).Seconds()*1000,
 						time.Duration(h.ValueAtQuantile(95)).Seconds()*1000,
 						time.Duration(h.ValueAtQuantile(99)).Seconds()*1000,
 						time.Duration(h.ValueAtQuantile(100)).Seconds()*1000)
 				}
-				lastOpsByOp[i] = ops
+				lastOpsByOp[i] = numOpsByOp
 			}
 
 			lastOps = ops

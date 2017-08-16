@@ -10,11 +10,11 @@ var ddls = [...]string{
 create table warehouse (
   w_id        integer   not null primary key,
   w_name      varchar(10),
-  w_street_1  varchar(20),
-  w_street_2  varchar(20),
-  w_city      varchar(20),
-  w_state     char(2),
-  w_zip       char(9),
+  wStreet1  varchar(20),
+  wStreet2  varchar(20),
+  wCity      varchar(20),
+  wState     char(2),
+  wZip       char(9),
   w_tax       decimal(4,4),
   w_ytd       decimal(12,2)
 );`,
@@ -22,46 +22,46 @@ create table warehouse (
 	// 10 districts per warehouse
 	`
 create table district (
-  d_id         integer       not null,
+  dID         integer       not null,
   d_w_id       integer       not null,
   d_name       varchar(10),
-  d_street_1   varchar(20),
-  d_street_2   varchar(20),
-  d_city       varchar(20),
-  d_state      char(2),
-  d_zip        char(9),
+  dStreet1   varchar(20),
+  dStreet2   varchar(20),
+  dCity       varchar(20),
+  dState      char(2),
+  dZip        char(9),
   d_tax        decimal(4,4),
   d_ytd        decimal(12,2),
   d_next_o_id  integer,
-  primary key (d_w_id, d_id),
+  primary key (d_w_id, dID),
   foreign key (d_w_id) references warehouse (w_id)
 );`,
 
 	`
 create table customer (
-  c_id           integer        not null,
-  c_d_id         integer        not null,
-  c_w_id         integer        not null,
-  c_first        varchar(16),
-  c_middle       char(2),
-  c_last         varchar(16),
-  c_street_1     varchar(20),
-  c_street_2     varchar(20),
-  c_city         varchar(20),
-  c_state        char(2),
-  c_zip          char(9),
-  c_phone        char(16),
-  c_since        timestamp,
-  c_credit       char(2),
-  c_credit_lim   decimal(12,2),
-  c_discount     decimal(4,4),
-  c_balance      decimal(12,2),
+  cID           integer        not null,
+  cDID         integer        not null,
+  cWID         integer        not null,
+  cFirst        varchar(16),
+  cMiddle       char(2),
+  cLast         varchar(16),
+  cStreet1     varchar(20),
+  cStreet2     varchar(20),
+  cCity         varchar(20),
+  cState        char(2),
+  cZip          char(9),
+  cPhone        char(16),
+  cSince        timestamp,
+  cCredit       char(2),
+  cCreditLim   decimal(12,2),
+  cDiscount     decimal(4,4),
+  cBalance      decimal(12,2),
   c_ytd_payment  decimal(12,2),
   c_payment_cnt  integer,
   c_delivery_cnt integer,
-  c_data         varchar(500),
-  primary key (c_w_id, c_d_id, c_id),
-  foreign key (c_w_id, c_d_id) references district (d_w_id, d_id)
+  cData         varchar(500),
+  primary key (cWID, cDID, cID),
+  foreign key (cWID, cDID) references district (d_w_id, dID)
 );`,
 
 	// No PK necessary for this table.
@@ -72,11 +72,11 @@ create table history (
   h_c_w_id integer,
   h_d_id   integer,
   h_w_id   integer,
-  h_date   timestamp,
-  h_amount decimal(6,2),
+  hDate   timestamp,
+  hAmount decimal(6,2),
   h_data   varchar(24),
-  foreign key (h_c_w_id, h_c_d_id, h_c_id) references customer (c_w_id, c_d_id, c_id),
-  foreign key (h_w_id, h_d_id) references district (d_w_id, d_id)
+  foreign key (h_c_w_id, h_c_d_id, h_c_id) references customer (cWID, cDID, cID),
+  foreign key (h_w_id, h_d_id) references district (d_w_id, dID)
 );`,
 
 	`
@@ -90,7 +90,7 @@ create table "order" (
   o_ol_cnt     integer,
   o_all_local  integer,
   primary key (o_w_id, o_d_id, o_id),
-  foreign key (o_w_id, o_d_id, o_c_id) references customer (c_w_id, c_d_id, c_id)
+  foreign key (o_w_id, o_d_id, o_c_id) references customer (cWID, cDID, cID)
 );`,
 
 	`
@@ -153,7 +153,7 @@ create table order_line (
   foreign key (ol_supply_w_id, ol_i_id) references stock (s_w_id, s_i_id)
 );`,
 
-	`create index customer_idx on customer (c_w_id, c_d_id, c_last, c_first);`,
+	`create index customer_idx on customer (cWID, cDID, cLast, cFirst);`,
 	`create unique index order_idx on "order" (o_w_id, o_d_id, o_carrier_id, o_id);`,
 }
 

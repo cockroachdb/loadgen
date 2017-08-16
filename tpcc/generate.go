@@ -32,7 +32,7 @@ const originalString = "ORIGINAL"
 
 // District constants
 const ytd = 30000.00 // also used by warehouse
-const nextOrderId = 3001
+const nextOrderID = 3001
 
 // Customer constants
 const creditLimit = 50000.00
@@ -80,7 +80,7 @@ func generateData(db *sql.DB) {
 INSERT INTO item (i_id, i_im_id, i_name, i_price, i_data)
 VALUES ($1, $2, $3, $4, $5)`)
 	stmtWarehouse := prepare(db, `
-INSERT INTO warehouse (w_id, w_name, w_street_1, w_street_2, w_city, w_state, w_zip, w_tax, w_ytd)
+INSERT INTO warehouse (w_id, w_name, wStreet1, wStreet2, wCity, wState, wZip, w_tax, w_ytd)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`)
 	stmtStock := prepare(db, `
 INSERT INTO stock (
@@ -90,19 +90,19 @@ INSERT INTO stock (
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`)
 	stmtDistrict := prepare(db, `
 INSERT INTO district (
-	d_id, d_w_id, d_name, d_street_1, d_street_2,
-	d_city, d_state, d_zip, d_tax, d_ytd, d_next_o_id)
+	dID, d_w_id, d_name, dStreet1, dStreet2,
+	dCity, dState, dZip, d_tax, d_ytd, d_next_o_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 	stmtCustomer := prepare(db, `
 INSERT INTO customer (
-	c_id, c_d_id, c_w_id, c_first, c_middle, c_last,
-	c_street_1, c_street_2, c_city, c_state, c_zip,
-	c_phone, c_since, c_credit, c_credit_lim, c_discount,
-	c_balance, c_ytd_payment, c_payment_cnt,
-	c_delivery_cnt, c_data)
+	cID, cDID, cWID, cFirst, cMiddle, cLast,
+	cStreet1, cStreet2, cCity, cState, cZip,
+	cPhone, cSince, cCredit, cCreditLim, cDiscount,
+	cBalance, c_ytd_payment, c_payment_cnt,
+	c_delivery_cnt, cData)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`)
 	stmtHistory := prepare(db, `
-INSERT INTO history (h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, h_date, h_amount, h_data)
+INSERT INTO history (h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, hDate, hAmount, h_data)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
 	stmtOrder := prepare(db, `
 INSERT INTO "order" (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_carrier_id, o_ol_cnt, o_all_local)
@@ -133,9 +133,9 @@ VALUES ($1, $2, $3)`)
 	})
 
 	now := time.Now()
-	for w_id := 0; w_id < *warehouses; w_id++ {
-		fmt.Printf("Loading warehouse %d...\n", w_id)
-		stmtWarehouse.Exec(w_id,
+	for wID := 0; wID < *warehouses; wID++ {
+		fmt.Printf("Loading warehouse %d...\n", wID)
+		if _, err := stmtWarehouse.Exec(wID,
 			randInt(6, 10),  // name
 			randInt(10, 20), // street_1
 			randInt(10, 20), // street_2
@@ -143,11 +143,13 @@ VALUES ($1, $2, $3)`)
 			randState(),
 			randZip(),
 			randTax(),
-			ytd)
+			ytd); err != nil {
+			panic(err)
+		}
 
 		// 100,000 stock per warehouse.
 		parallelLoad(nStock, "stock", func(id int) {
-			if _, err := stmtStock.Exec(id, w_id,
+			if _, err := stmtStock.Exec(id, wID,
 				randInt(10, 100),     // quantity
 				randAString(24, 24),  // dist_01
 				randAString(24, 24),  // dist_02
@@ -169,9 +171,9 @@ VALUES ($1, $2, $3)`)
 		})
 
 		// 10 districts per warehouse
-		for d_id := 1; d_id <= 10; d_id++ {
-			fmt.Printf("Loading warehouse %d district %d...\n", w_id, d_id)
-			stmtDistrict.Exec(d_id, w_id,
+		for dID := 1; dID <= 10; dID++ {
+			fmt.Printf("Loading warehouse %d district %d...\n", wID, dID)
+			if _, err := stmtDistrict.Exec(dID, wID,
 				randAString(6, 10),  // name
 				randAString(10, 20), // street 1
 				randAString(10, 20), // street 2
@@ -180,10 +182,12 @@ VALUES ($1, $2, $3)`)
 				randZip(),
 				randTax(),
 				ytd,
-				nextOrderId)
+				nextOrderID); err != nil {
+				panic(err)
+			}
 
 			// 3000 customers per district
-			parallelLoad(nCustomers, "customer", func(c_id int) {
+			parallelLoad(nCustomers, "customer", func(cID int) {
 				// 10% of the customer rows have bad credit.
 				// See section 4.3, under the CUSTOMER table population section.
 				credit := goodCredit
@@ -194,12 +198,12 @@ VALUES ($1, $2, $3)`)
 				var lastName string
 				// The first 1000 customers get a last name generated according to their id;
 				// the rest get an NURand generated last name.
-				if c_id <= 1000 {
-					lastName = randCLastSyllables(c_id - 1)
+				if cID <= 1000 {
+					lastName = randCLastSyllables(cID - 1)
 				} else {
 					lastName = randCLast()
 				}
-				if _, err := stmtCustomer.Exec(c_id, d_id, w_id,
+				if _, err := stmtCustomer.Exec(cID, dID, wID,
 					randAString(8, 16), // first name
 					middleName,
 					lastName,
@@ -223,44 +227,44 @@ VALUES ($1, $2, $3)`)
 				}
 
 				// 1 history row per customer
-				if _, err := stmtHistory.Exec(c_id, d_id, w_id, d_id, w_id, time.Now(), 10.00, randAString(12, 24)); err != nil {
+				if _, err := stmtHistory.Exec(cID, dID, wID, dID, wID, time.Now(), 10.00, randAString(12, 24)); err != nil {
 					panic(err)
 				}
 			})
 
 			// 3000 orders per district, with a random permutation over the customers.
 			var randomCIDs [nCustomers]int
-			for i, c_id := range rand.Perm(nCustomers) {
-				randomCIDs[i] = c_id + 1
+			for i, cID := range rand.Perm(nCustomers) {
+				randomCIDs[i] = cID + 1
 			}
-			parallelLoad(nCustomers, "order", func(o_id int) {
-				ol_cnt := randInt(5, 15)
-				var carrierId interface{}
-				if o_id < 2101 {
-					carrierId = randInt(1, 10)
+			parallelLoad(nCustomers, "order", func(oID int) {
+				olCnt := randInt(5, 15)
+				var carrierID interface{}
+				if oID < 2101 {
+					carrierID = randInt(1, 10)
 				} else {
-					carrierId = sql.NullInt64{Int64: 0, Valid: false}
+					carrierID = sql.NullInt64{Int64: 0, Valid: false}
 				}
-				entry_d := time.Now()
-				if _, err := stmtOrder.Exec(o_id, d_id, w_id, randomCIDs[o_id-1], entry_d, carrierId, ol_cnt, 1); err != nil {
+				entryD := time.Now()
+				if _, err := stmtOrder.Exec(oID, dID, wID, randomCIDs[oID-1], entryD, carrierID, olCnt, 1); err != nil {
 					panic(err)
 				}
 
-				for ol_number := 1; ol_number <= ol_cnt; ol_number++ {
+				for olNumber := 1; olNumber <= olCnt; olNumber++ {
 					var amount float64
-					var delivery_d interface{}
-					if o_id < 2101 {
+					var deliveryD interface{}
+					if oID < 2101 {
 						amount = 0
-						delivery_d = entry_d
+						deliveryD = entryD
 					} else {
 						amount = float64(randInt(1, 999999)) / 100.0
-						delivery_d = sql.NullInt64{Int64: 0, Valid: false}
+						deliveryD = sql.NullInt64{Int64: 0, Valid: false}
 					}
 
-					if _, err := stmtOrderLine.Exec(o_id, d_id, w_id, ol_number,
+					if _, err := stmtOrderLine.Exec(oID, dID, wID, olNumber,
 						randInt(1, 100000), // ol_i_id
-						w_id,               // supply_w_id
-						delivery_d,
+						wID,                // supply_w_id
+						deliveryD,
 						5, // quantity
 						amount,
 						randAString(24, 24)); err != nil {
@@ -269,13 +273,13 @@ VALUES ($1, $2, $3)`)
 				}
 
 				// The last 900 orders have entries in new orders.
-				if o_id >= 2101 {
-					if _, err := stmtNewOrder.Exec(o_id, d_id, w_id); err != nil {
+				if oID >= 2101 {
+					if _, err := stmtNewOrder.Exec(oID, dID, wID); err != nil {
 						panic(err)
 					}
 				}
 			})
-			fmt.Printf("Loaded warehouse %d district %d\n", w_id, d_id)
+			fmt.Printf("Loaded warehouse %d district %d\n", wID, dID)
 		}
 	}
 }

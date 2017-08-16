@@ -57,7 +57,7 @@ const (
 const nTxTypes = 5
 
 type tpccTx interface {
-	run(db *sql.DB, w_id int) (interface{}, error)
+	run(db *sql.DB, wID int) (interface{}, error)
 }
 
 type tx struct {

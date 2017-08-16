@@ -42,9 +42,9 @@ type delivery struct{}
 
 var _ tpccTx = newOrder{}
 
-func (_ delivery) run(db *sql.DB, w_id int) (interface{}, error) {
-	o_carrier_id := rand.Intn(10) + 1
-	ol_delivery_d := time.Now()
+func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
+	oCarrierID := rand.Intn(10) + 1
+	olDeliveryD := time.Now()
 
 	if err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
 		getNewOrder, err := tx.Prepare(`
@@ -64,7 +64,7 @@ func (_ delivery) run(db *sql.DB, w_id int) (interface{}, error) {
 		}
 		updateOrder, err := tx.Prepare(`
 			UPDATE "order"
-			SET o_carrier_id = $1
+			SET oCarrierID = $1
 			WHERE o_w_id = $2 AND o_d_id = $3 AND o_id = $4
 			RETURNING o_c_id`)
 		if err != nil {
@@ -72,7 +72,7 @@ func (_ delivery) run(db *sql.DB, w_id int) (interface{}, error) {
 		}
 		updateOrderLine, err := tx.Prepare(`
 			UPDATE order_line
-			SET ol_delivery_d = $1
+			SET olDeliveryD = $1
 			WHERE ol_w_id = $2 AND ol_d_id = $3 AND ol_o_id = $4`)
 		if err != nil {
 			return err
@@ -85,38 +85,38 @@ func (_ delivery) run(db *sql.DB, w_id int) (interface{}, error) {
 		}
 		updateCustomer, err := tx.Prepare(`
 			UPDATE customer
-			SET (c_balance, c_delivery_cnt) =
-				(c_balance + $1, c_delivery_cnt + 1)
-			WHERE c_w_id = $2 AND c_d_id = $3 AND c_id = $4`)
+			SET (cBalance, c_delivery_cnt) =
+				(cBalance + $1, c_delivery_cnt + 1)
+			WHERE cWID = $2 AND cDID = $3 AND cID = $4`)
 		if err != nil {
 			return err
 		}
 
 		// 2.7.4.2. For each district:
-		for d_id := 1; d_id <= 10; d_id++ {
-			var o_id int
-			if err := getNewOrder.QueryRow(w_id, d_id).Scan(&o_id); err != nil {
+		for dID := 1; dID <= 10; dID++ {
+			var oID int
+			if err := getNewOrder.QueryRow(wID, dID).Scan(&oID); err != nil {
 				// If no matching order is found, the delivery of this order is skipped.
 				if err != sql.ErrNoRows {
 					return err
 				}
 				continue
 			}
-			if _, err := delNewOrder.Exec(w_id, d_id, o_id); err != nil {
+			if _, err := delNewOrder.Exec(wID, dID, oID); err != nil {
 				return err
 			}
-			var o_c_id int
-			if err := updateOrder.QueryRow(o_carrier_id, w_id, d_id, o_id).Scan(&o_c_id); err != nil {
+			var oCID int
+			if err := updateOrder.QueryRow(oCarrierID, wID, dID, oID).Scan(&oCID); err != nil {
 				return err
 			}
-			if _, err := updateOrderLine.Exec(ol_delivery_d, w_id, d_id, o_id); err != nil {
+			if _, err := updateOrderLine.Exec(olDeliveryD, wID, dID, oID); err != nil {
 				return err
 			}
-			var ol_total float64
-			if err := sumOrderLine.QueryRow(w_id, d_id, o_id).Scan(&ol_total); err != nil {
+			var olTotal float64
+			if err := sumOrderLine.QueryRow(wID, dID, oID).Scan(&olTotal); err != nil {
 				return err
 			}
-			if _, err := updateCustomer.Exec(ol_total, w_id, d_id, o_id); err != nil {
+			if _, err := updateCustomer.Exec(olTotal, wID, dID, oID); err != nil {
 				return err
 			}
 		}
