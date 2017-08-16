@@ -51,7 +51,7 @@ check:
 	@echo "checking for \"path\" imports"
 	@! git grep -F '"path"' -- '*.go'
 	@echo "errcheck"
-	@errcheck ./...
+	@errcheck -exclude errcheck_excludes.txt ./...
 	@echo "vet"
 	@! go tool vet . 2>&1 | \
 	  grep -vE '^vet: cannot process directory .git'
@@ -59,9 +59,7 @@ check:
 	@! go tool vet --shadow . 2>&1 | \
 	  grep -vE '(declaration of err shadows|^vet: cannot process directory \.git)'
 	@echo "golint"
-	@! golint ./... | grep -vE '(\.pb\.go)'
-	@echo "varcheck"
-	@varcheck -e ./...
+	@! golint ./... | grep -vE '(\.pb\.go|_string)'
 	@echo "gofmt (simplify)"
 	@! gofmt -s -d -l . 2>&1 | grep -vE '^\.git/'
 	@echo "goimports"

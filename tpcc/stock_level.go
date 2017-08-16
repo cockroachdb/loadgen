@@ -38,31 +38,31 @@ import (
 
 type stockLevelData struct {
 	// This data must all be returned by the transaction. See 2.8.3.4.
-	d_id      int
+	dID       int
 	threshold int
-	low_stock int
+	lowStock  int
 }
 
 type stockLevel struct{}
 
 var _ tpccTx = stockLevel{}
 
-func (_ stockLevel) run(db *sql.DB, w_id int) (interface{}, error) {
+func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
 	// 2.8.1.2: The threshold of minimum quantity in stock is selected at random
 	// within [10..20].
 	d := stockLevelData{
 		threshold: randInt(10, 20),
-		d_id:      rand.Intn(9) + 1,
+		dID:       rand.Intn(9) + 1,
 	}
 
 	if err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-		var d_next_o_id int
+		var dNextOID int
 		if err := tx.QueryRow(`
 				SELECT d_next_o_id
 				FROM district
-				WHERE d_w_id = $1 AND d_id = $2`,
-			w_id, d.d_id,
-		).Scan(&d_next_o_id); err != nil {
+				WHERE d_w_id = $1 AND dID = $2`,
+			wID, d.dID,
+		).Scan(&dNextOID); err != nil {
 			return err
 		}
 
@@ -78,8 +78,8 @@ func (_ stockLevel) run(db *sql.DB, w_id int) (interface{}, error) {
 				  AND ol_o_id BETWEEN $3 - 20 AND $3 - 1
 				  AND s_w_id = $1
 				  AND s_quantity < $4`,
-			w_id, d.d_id, d_next_o_id, d.threshold,
-		).Scan(&d.low_stock); err != nil {
+			wID, d.dID, dNextOID, d.threshold,
+		).Scan(&d.lowStock); err != nil {
 			return err
 		}
 		return nil

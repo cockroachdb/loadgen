@@ -1,0 +1,3 @@
+(*database/sql.DB).Close
+(*database/sql.Rows).Close
+(*database/sql.Stmt).Close

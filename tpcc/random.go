@@ -75,9 +75,8 @@ func randOriginalString() string {
 		l := randInt(26, 50)
 		off := randInt(0, l-8)
 		return randAString(off, off) + originalString + randAString(l-off-8, l-off-8)
-	} else {
-		return randAString(26, 50)
 	}
+	return randAString(26, 50)
 }
 
 // randNString generates a random numeric string of length between min anx max
