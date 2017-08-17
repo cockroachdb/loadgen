@@ -60,7 +60,7 @@ func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
 	if err := crdb.ExecuteTx(
 		context.Background(),
 		db,
-		&sql.TxOptions{},
+		&sql.TxOptions{Isolation: sql.LevelSerializable},
 		func(tx *sql.Tx) error {
 			var dNextOID int
 			if err := tx.QueryRow(`
