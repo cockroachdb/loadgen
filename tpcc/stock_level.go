@@ -66,7 +66,7 @@ func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
 			if err := tx.QueryRow(`
 				SELECT d_next_o_id
 				FROM district
-				WHERE d_w_id = $1 AND dID = $2`,
+				WHERE d_w_id = $1 AND d_id = $2`,
 				wID, d.dID,
 			).Scan(&dNextOID); err != nil {
 				return err

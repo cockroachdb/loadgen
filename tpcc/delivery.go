@@ -91,9 +91,9 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 			}
 			updateCustomer, err := tx.Prepare(`
 			UPDATE customer
-			SET (cBalance, c_delivery_cnt) =
-				(cBalance + $1, c_delivery_cnt + 1)
-			WHERE cWID = $2 AND cDID = $3 AND cID = $4`)
+			SET (c_balance, c_delivery_cnt) =
+				(c_Balance + $1, c_delivery_cnt + 1)
+			WHERE c_w_id = $2 AND c_d_id = $3 AND c_id = $4`)
 			if err != nil {
 				return err
 			}

@@ -136,7 +136,7 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			if err := tx.QueryRow(`
 				UPDATE district
 				SET d_next_o_id = d_next_o_id + 1
-				WHERE d_w_id = $1 AND dID = $2
+				WHERE d_w_id = $1 AND d_id = $2
 				RETURNING d_tax, d_next_o_id`,
 				d.wID, d.dID,
 			).Scan(&d.dTax, &dNextOID); err != nil {
@@ -147,9 +147,9 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 
 			// Select the customer's discount, last name and credit.
 			if err := tx.QueryRow(`
-				SELECT cDiscount, cLast, cCredit
+				SELECT c_discount, c_last, c_credit
 				FROM customer
-				WHERE cWID = $1 AND cDID = $2 AND cID = $3`,
+				WHERE c_w_id = $1 AND c_d_id = $2 AND c_id = $3`,
 				d.wID, d.dID, d.cID,
 			).Scan(&d.cDiscount, &d.cLast, &d.cCredit); err != nil {
 				return err
