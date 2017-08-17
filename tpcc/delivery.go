@@ -20,6 +20,8 @@ import (
 	"math/rand"
 	"time"
 
+	"context"
+
 	"github.com/cockroachdb/cockroach-go/crdb"
 )
 
@@ -46,82 +48,86 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 	oCarrierID := rand.Intn(10) + 1
 	olDeliveryD := time.Now()
 
-	if err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-		getNewOrder, err := tx.Prepare(`
+	if err := crdb.ExecuteTx(
+		context.Background(),
+		db,
+		&sql.TxOptions{},
+		func(tx *sql.Tx) error {
+			getNewOrder, err := tx.Prepare(`
 			SELECT no_o_id
 			FROM new_order
 			WHERE no_w_id = $1 AND no_d_id = $2
 			ORDER BY no_o_id ASC
 			LIMIT 1`)
-		if err != nil {
-			return err
-		}
-		delNewOrder, err := tx.Prepare(`
+			if err != nil {
+				return err
+			}
+			delNewOrder, err := tx.Prepare(`
 			DELETE FROM new_order
 			WHERE no_w_id = $1 AND no_d_id = $2 AND no_o_id = $3`)
-		if err != nil {
-			return err
-		}
-		updateOrder, err := tx.Prepare(`
+			if err != nil {
+				return err
+			}
+			updateOrder, err := tx.Prepare(`
 			UPDATE "order"
 			SET oCarrierID = $1
 			WHERE o_w_id = $2 AND o_d_id = $3 AND o_id = $4
 			RETURNING o_c_id`)
-		if err != nil {
-			return err
-		}
-		updateOrderLine, err := tx.Prepare(`
+			if err != nil {
+				return err
+			}
+			updateOrderLine, err := tx.Prepare(`
 			UPDATE order_line
 			SET olDeliveryD = $1
 			WHERE ol_w_id = $2 AND ol_d_id = $3 AND ol_o_id = $4`)
-		if err != nil {
-			return err
-		}
-		sumOrderLine, err := tx.Prepare(`
+			if err != nil {
+				return err
+			}
+			sumOrderLine, err := tx.Prepare(`
 			SELECT SUM(ol_amount) FROM order_line
 			WHERE ol_w_id = $1 AND ol_d_id = $2 AND ol_o_id = $3`)
-		if err != nil {
-			return err
-		}
-		updateCustomer, err := tx.Prepare(`
+			if err != nil {
+				return err
+			}
+			updateCustomer, err := tx.Prepare(`
 			UPDATE customer
 			SET (cBalance, c_delivery_cnt) =
 				(cBalance + $1, c_delivery_cnt + 1)
 			WHERE cWID = $2 AND cDID = $3 AND cID = $4`)
-		if err != nil {
-			return err
-		}
+			if err != nil {
+				return err
+			}
 
-		// 2.7.4.2. For each district:
-		for dID := 1; dID <= 10; dID++ {
-			var oID int
-			if err := getNewOrder.QueryRow(wID, dID).Scan(&oID); err != nil {
-				// If no matching order is found, the delivery of this order is skipped.
-				if err != sql.ErrNoRows {
+			// 2.7.4.2. For each district:
+			for dID := 1; dID <= 10; dID++ {
+				var oID int
+				if err := getNewOrder.QueryRow(wID, dID).Scan(&oID); err != nil {
+					// If no matching order is found, the delivery of this order is skipped.
+					if err != sql.ErrNoRows {
+						return err
+					}
+					continue
+				}
+				if _, err := delNewOrder.Exec(wID, dID, oID); err != nil {
 					return err
 				}
-				continue
+				var oCID int
+				if err := updateOrder.QueryRow(oCarrierID, wID, dID, oID).Scan(&oCID); err != nil {
+					return err
+				}
+				if _, err := updateOrderLine.Exec(olDeliveryD, wID, dID, oID); err != nil {
+					return err
+				}
+				var olTotal float64
+				if err := sumOrderLine.QueryRow(wID, dID, oID).Scan(&olTotal); err != nil {
+					return err
+				}
+				if _, err := updateCustomer.Exec(olTotal, wID, dID, oID); err != nil {
+					return err
+				}
 			}
-			if _, err := delNewOrder.Exec(wID, dID, oID); err != nil {
-				return err
-			}
-			var oCID int
-			if err := updateOrder.QueryRow(oCarrierID, wID, dID, oID).Scan(&oCID); err != nil {
-				return err
-			}
-			if _, err := updateOrderLine.Exec(olDeliveryD, wID, dID, oID); err != nil {
-				return err
-			}
-			var olTotal float64
-			if err := sumOrderLine.QueryRow(wID, dID, oID).Scan(&olTotal); err != nil {
-				return err
-			}
-			if _, err := updateCustomer.Exec(olTotal, wID, dID, oID); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
+			return nil
+		}); err != nil {
 		return nil, err
 	}
 	return nil, nil

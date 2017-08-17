@@ -22,6 +22,8 @@ import (
 
 	"github.com/pkg/errors"
 
+	"context"
+
 	"github.com/cockroachdb/cockroach-go/crdb"
 )
 
@@ -72,88 +74,92 @@ func (o orderStatus) run(db *sql.DB, wID int) (interface{}, error) {
 		d.cID = randCustomerID()
 	}
 
-	if err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-		// 2.6.2.2 explains this entire transaction.
+	if err := crdb.ExecuteTx(
+		context.Background(),
+		db,
+		&sql.TxOptions{},
+		func(tx *sql.Tx) error {
+			// 2.6.2.2 explains this entire transaction.
 
-		// Select the customer
-		if d.cID != 0 {
-			// Case 1: select by customer id
-			if err := tx.QueryRow(`
+			// Select the customer
+			if d.cID != 0 {
+				// Case 1: select by customer id
+				if err := tx.QueryRow(`
 					SELECT cBalance, cFirst, cMiddle, cLast
 					FROM customer
 					WHERE cWID = $1 AND cDID = $2 AND cID = $3`,
-				wID, d.dID, d.cID,
-			).Scan(&d.cBalance, &d.cFirst, &d.cMiddle, &d.cLast); err != nil {
-				return errors.Wrap(err, "select by customer idfail")
-			}
-		} else {
-			// Case 2: Pick the middle row, rounded up, from the selection by last name.
-			rows, err := tx.Query(`
+					wID, d.dID, d.cID,
+				).Scan(&d.cBalance, &d.cFirst, &d.cMiddle, &d.cLast); err != nil {
+					return errors.Wrap(err, "select by customer idfail")
+				}
+			} else {
+				// Case 2: Pick the middle row, rounded up, from the selection by last name.
+				rows, err := tx.Query(`
 					SELECT cID, cBalance, cFirst, cMiddle
 					FROM customer
 					WHERE cWID = $1 AND cDID = $2 AND cLast = $3
 					ORDER BY cFirst ASC`,
-				wID, d.dID, d.cLast)
-			if err != nil {
-				return errors.Wrap(err, "select by last name fail")
-			}
-			customers := make([]customerData, 0, 1)
-			for rows.Next() {
-				c := customerData{}
-				err = rows.Scan(&c.cID, &c.cBalance, &c.cFirst, &c.cMiddle)
+					wID, d.dID, d.cLast)
 				if err != nil {
-					rows.Close()
-					return err
+					return errors.Wrap(err, "select by last name fail")
 				}
-				customers = append(customers, c)
-			}
-			rows.Close()
-			cIdx := len(customers) / 2
-			if len(customers)%2 == 0 {
-				cIdx--
+				customers := make([]customerData, 0, 1)
+				for rows.Next() {
+					c := customerData{}
+					err = rows.Scan(&c.cID, &c.cBalance, &c.cFirst, &c.cMiddle)
+					if err != nil {
+						rows.Close()
+						return err
+					}
+					customers = append(customers, c)
+				}
+				rows.Close()
+				cIdx := len(customers) / 2
+				if len(customers)%2 == 0 {
+					cIdx--
+				}
+
+				c := customers[cIdx]
+				d.cID = c.cID
+				d.cBalance = c.cBalance
+				d.cFirst = c.cFirst
+				d.cMiddle = c.cMiddle
 			}
 
-			c := customers[cIdx]
-			d.cID = c.cID
-			d.cBalance = c.cBalance
-			d.cFirst = c.cFirst
-			d.cMiddle = c.cMiddle
-		}
-
-		// Select the customer's order.
-		if err := tx.QueryRow(`
+			// Select the customer's order.
+			if err := tx.QueryRow(`
 				SELECT o_id, o_entry_d, o_carrier_id
 				FROM "order"
 				WHERE o_w_id = $1 AND o_d_id = $2 AND o_c_id = $3
 				ORDER BY o_id DESC
 				LIMIT 1`,
-			wID, d.dID, d.cID,
-		).Scan(&d.oID, &d.oEntryD, &d.oCarrierID); err != nil {
-			return errors.Wrap(err, "select order fail")
-		}
+				wID, d.dID, d.cID,
+			).Scan(&d.oID, &d.oEntryD, &d.oCarrierID); err != nil {
+				return errors.Wrap(err, "select order fail")
+			}
 
-		// Select the items from the customer's order.
-		rows, err := tx.Query(`
+			// Select the items from the customer's order.
+			rows, err := tx.Query(`
 				SELECT ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_delivery_d
 				FROM order_line
 				WHERE ol_w_id = $1 AND ol_d_id = $2 AND ol_o_id = $3`,
-			wID, d.dID, d.oID)
-		if err != nil {
-			return errors.Wrap(err, "select items fail")
-		}
-		defer rows.Close()
-
-		// On average there's 10 items per order - 2.4.1.3
-		d.items = make([]orderItem, 0, 10)
-		for rows.Next() {
-			item := orderItem{}
-			if err := rows.Scan(&item.olIID, &item.olSupplyWID, &item.olQuantity, &item.olAmount, &item.olDeliveryD); err != nil {
-				return err
+				wID, d.dID, d.oID)
+			if err != nil {
+				return errors.Wrap(err, "select items fail")
 			}
-			d.items = append(d.items, item)
-		}
-		return nil
-	}); err != nil {
+			defer rows.Close()
+
+			// On average there's 10 items per order - 2.4.1.3
+			d.items = make([]orderItem, 0, 10)
+			for rows.Next() {
+				item := orderItem{}
+				if err := rows.Scan(&item.olIID, &item.olSupplyWID, &item.olQuantity, &item.olAmount, &item.olDeliveryD); err != nil {
+					return err
+				}
+				d.items = append(d.items, item)
+			}
+			return nil
+		}); err != nil {
 		return nil, err
 	}
 	return d, nil
