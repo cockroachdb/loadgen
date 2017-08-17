@@ -31,9 +31,11 @@ import (
 	"os/signal"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"testing"
 	"time"
 
 	"golang.org/x/net/context"
@@ -73,8 +75,6 @@ var writeSeq = flag.Int64("write-seq", 0, "Initial write sequence value.")
 var seqSeed = flag.Int64("seed", time.Now().UnixNano(), "Key hash seed.")
 var sequential = flag.Bool("sequential", false, "Pick keys sequentially instead of randomly.")
 var drop = flag.Bool("drop", false, "Clear the existing data before starting.")
-var benchmarkName = flag.String("benchmark-name", "BenchmarkBlocks", "Test name to report "+
-	"for Go benchmark results.")
 
 // Mongo flags. See https://godoc.org/gopkg.in/mgo.v2#Session.SetSafe for details.
 var mongoWMode = flag.String("mongo-wmode", "", "WMode for mongo session (eg: majority)")
@@ -661,9 +661,20 @@ func main() {
 
 	defer func() {
 		// Output results that mimic Go's built-in benchmark format.
-		elapsed := time.Since(start)
-		fmt.Printf("%s\t%8d\t%12.1f ns/op\n",
-			*benchmarkName, numOps, float64(elapsed.Nanoseconds())/float64(numOps))
+
+		benchmarkName := strings.Join([]string{
+			"BenchmarkLoadgenKV",
+			fmt.Sprintf("readPercent=%d", *readPercent),
+			fmt.Sprintf("splits=%d", *splits),
+			fmt.Sprintf("concurrency=%d", *concurrency),
+			fmt.Sprintf("duration=%s", *duration),
+		}, "/")
+
+		result := testing.BenchmarkResult{
+			N: int(numOps),
+			T: time.Since(start),
+		}
+		fmt.Printf("%s\t%s\n", benchmarkName, result)
 	}()
 
 	cumLatency := hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
