@@ -23,6 +23,8 @@ import (
 	"flag"
 	"fmt"
 	"hash"
+	"io"
+	"io/ioutil"
 	"log"
 	"math"
 	"math/rand"
@@ -75,6 +77,7 @@ var writeSeq = flag.Int64("write-seq", 0, "Initial write sequence value.")
 var seqSeed = flag.Int64("seed", time.Now().UnixNano(), "Key hash seed.")
 var sequential = flag.Bool("sequential", false, "Pick keys sequentially instead of randomly.")
 var drop = flag.Bool("drop", false, "Clear the existing data before starting.")
+var benchmarkMode = flag.Bool("bench", false, "Produce Go benchmark-style results.")
 
 // Mongo flags. See https://godoc.org/gopkg.in/mgo.v2#Session.SetSafe for details.
 var mongoWMode = flag.String("mongo-wmode", "", "WMode for mongo session (eg: majority)")
@@ -659,23 +662,27 @@ func main() {
 		}()
 	}
 
-	defer func() {
-		// Output results that mimic Go's built-in benchmark format.
+	var out io.Writer = os.Stdout
+	if *benchmarkMode {
+		out = ioutil.Discard
+		defer func() {
+			// Output results that mimic Go's built-in benchmark format.
 
-		benchmarkName := strings.Join([]string{
-			"BenchmarkLoadgenKV",
-			fmt.Sprintf("readPercent=%d", *readPercent),
-			fmt.Sprintf("splits=%d", *splits),
-			fmt.Sprintf("concurrency=%d", *concurrency),
-			fmt.Sprintf("duration=%s", *duration),
-		}, "/")
+			benchmarkName := strings.Join([]string{
+				"BenchmarkLoadgenKV",
+				fmt.Sprintf("readPercent=%d", *readPercent),
+				fmt.Sprintf("splits=%d", *splits),
+				fmt.Sprintf("concurrency=%d", *concurrency),
+				fmt.Sprintf("duration=%s", *duration),
+			}, "/")
 
-		result := testing.BenchmarkResult{
-			N: int(numOps),
-			T: time.Since(start),
-		}
-		fmt.Printf("%s\t%s\n", benchmarkName, result)
-	}()
+			result := testing.BenchmarkResult{
+				N: int(numOps),
+				T: time.Since(start),
+			}
+			fmt.Printf("%s\t%s\n", benchmarkName, result)
+		}()
+	}
 
 	cumLatency := hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
 
@@ -714,10 +721,10 @@ func main() {
 			elapsed := now.Sub(lastNow)
 			ops := atomic.LoadUint64(&numOps)
 			if i%20 == 0 {
-				fmt.Println("_elapsed___errors__ops/sec(inst)___ops/sec(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+				fmt.Fprintln(out, "_elapsed___errors__ops/sec(inst)___ops/sec(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
 			}
 			i++
-			fmt.Printf("%8s %8d %14.1f %14.1f %8.1f %8.1f %8.1f %8.1f\n",
+			fmt.Fprintf(out, "%8s %8d %14.1f %14.1f %8.1f %8.1f %8.1f %8.1f\n",
 				time.Duration(time.Since(start).Seconds()+0.5)*time.Second,
 				numErr,
 				float64(ops-lastOps)/elapsed.Seconds(),
@@ -746,8 +753,8 @@ func main() {
 
 			ops := atomic.LoadUint64(&numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___errors_____ops(total)___ops/sec(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
-			fmt.Printf("%7.1fs %8d %14d %14.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
+			fmt.Fprintln(out, "\n_elapsed___errors_____ops(total)___ops/sec(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+			fmt.Fprintf(out, "%7.1fs %8d %14d %14.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
 				time.Since(start).Seconds(), numErr,
 				ops, float64(ops)/elapsed,
 				time.Duration(avg).Seconds()*1000,
