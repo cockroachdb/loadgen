@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"context"
+
 	"github.com/cockroachdb/cockroach-go/crdb"
 	"github.com/pkg/errors"
 )
@@ -218,10 +220,14 @@ func createTables(db *sql.DB) error {
 			if *verbose {
 				fmt.Println("executing: ", dropStmt)
 			}
-			err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-				_, inErr := db.Exec(dropStmt)
-				return inErr
-			})
+			err := crdb.ExecuteTx(
+				context.Background(),
+				db,
+				&sql.TxOptions{},
+				func(tx *sql.Tx) error {
+					_, inErr := db.Exec(dropStmt)
+					return inErr
+				})
 			if err != nil {
 				if *verbose {
 					fmt.Printf("Failed to create database %s... %s\n",
@@ -239,10 +245,14 @@ func createTables(db *sql.DB) error {
 		if *verbose {
 			fmt.Println("executing: ", createStmt)
 		}
-		err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-			_, inErr := db.Exec(createStmt)
-			return inErr
-		})
+		err := crdb.ExecuteTx(
+			context.Background(),
+			db,
+			&sql.TxOptions{},
+			func(tx *sql.Tx) error {
+				_, inErr := db.Exec(createStmt)
+				return inErr
+			})
 		if err != nil {
 			if *verbose {
 				fmt.Printf("Failed to create database %s... %s\n",
@@ -269,10 +279,14 @@ func createIndexes(db *sql.DB) error {
 		if *verbose {
 			fmt.Println("executing: ", stmt)
 		}
-		err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-			_, execErr := db.Exec(stmt)
-			return execErr
-		})
+		err := crdb.ExecuteTx(
+			context.Background(),
+			db,
+			&sql.TxOptions{},
+			func(tx *sql.Tx) error {
+				_, execErr := db.Exec(stmt)
+				return execErr
+			})
 		if err != nil {
 			return err
 		}

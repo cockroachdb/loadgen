@@ -28,16 +28,22 @@ import (
 	"strings"
 	"time"
 
+	"context"
+
 	"github.com/cockroachdb/cockroach-go/crdb"
 	"github.com/pkg/errors"
 )
 
 func doInserts(db *sql.DB, preamble string, inserts []string) error {
-	return crdb.ExecuteTx(db, func(*sql.Tx) error {
-		allInserts := strings.Join(inserts, ", ")
-		_, inErr := db.Exec(fmt.Sprintf("%s%s", preamble, allInserts))
-		return inErr
-	})
+	return crdb.ExecuteTx(
+		context.Background(),
+		db,
+		&sql.TxOptions{},
+		func(*sql.Tx) error {
+			allInserts := strings.Join(inserts, ", ")
+			_, inErr := db.Exec(fmt.Sprintf("%s%s", preamble, allInserts))
+			return inErr
+		})
 }
 
 func insertTableFromFile(db *sql.DB, filename string, tableType table) error {

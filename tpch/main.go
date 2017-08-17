@@ -34,6 +34,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"context"
+
 	"github.com/cockroachdb/cockroach-go/crdb"
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
@@ -164,10 +166,14 @@ func main() {
 	}
 
 	// Ensure the database exists
-	if err = crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-		_, inErr := tx.Exec("CREATE DATABASE IF NOT EXISTS tpch")
-		return inErr
-	}); err != nil {
+	if err = crdb.ExecuteTx(
+		context.Background(),
+		db,
+		&sql.TxOptions{},
+		func(tx *sql.Tx) error {
+			_, inErr := tx.Exec("CREATE DATABASE IF NOT EXISTS tpch")
+			return inErr
+		}); err != nil {
 		if *verbose {
 			log.Fatalf("failed to create database: %s\n", err)
 		}
