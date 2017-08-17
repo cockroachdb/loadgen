@@ -70,7 +70,7 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 			}
 			updateOrder, err := tx.Prepare(`
 			UPDATE "order"
-			SET oCarrierID = $1
+			SET o_carrier_id = $1
 			WHERE o_w_id = $2 AND o_d_id = $3 AND o_id = $4
 			RETURNING o_c_id`)
 			if err != nil {
@@ -78,7 +78,7 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 			}
 			updateOrderLine, err := tx.Prepare(`
 			UPDATE order_line
-			SET olDeliveryD = $1
+			SET ol_delivery_d = $1
 			WHERE ol_w_id = $2 AND ol_d_id = $3 AND ol_o_id = $4`)
 			if err != nil {
 				return err
