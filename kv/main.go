@@ -31,6 +31,7 @@ import (
 	"os/signal"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -73,8 +74,7 @@ var writeSeq = flag.Int64("write-seq", 0, "Initial write sequence value.")
 var seqSeed = flag.Int64("seed", time.Now().UnixNano(), "Key hash seed.")
 var sequential = flag.Bool("sequential", false, "Pick keys sequentially instead of randomly.")
 var drop = flag.Bool("drop", false, "Clear the existing data before starting.")
-var benchmarkName = flag.String("benchmark-name", "BenchmarkBlocks", "Test name to report "+
-	"for Go benchmark results.")
+var benchmarFileName = flag.String("benchmark-file", "-", "File name to write benchmark results to.")
 
 // Mongo flags. See https://godoc.org/gopkg.in/mgo.v2#Session.SetSafe for details.
 var mongoWMode = flag.String("mongo-wmode", "", "WMode for mongo session (eg: majority)")
@@ -586,6 +586,20 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
+	benchmarkOut := os.Stdout
+	if *benchmarFileName != "-" {
+		f, err := os.OpenFile(*benchmarFileName, os.O_WRONLY|os.O_APPEND|os.O_CREATE|os.O_SYNC, 0)
+		if err != nil {
+			log.Fatalf("could not open benchmark file %s: %s", *benchmarFileName, err)
+		}
+		defer func() {
+			if err := f.Close(); err != nil {
+				log.Fatalf("could not flush benchmark file %s: %s", *benchmarFileName, err)
+			}
+		}()
+		benchmarkOut = f
+	}
+
 	dbURL := "postgres://root@localhost:26257/photos?sslmode=disable"
 	if flag.NArg() == 1 {
 		dbURL = flag.Arg(0)
@@ -660,10 +674,18 @@ func main() {
 	}
 
 	defer func() {
-		// Output results that mimic Go's built-in benchmark format.
-		elapsed := time.Since(start)
-		fmt.Printf("%s\t%8d\t%12.1f ns/op\n",
-			*benchmarkName, numOps, float64(elapsed.Nanoseconds())/float64(numOps))
+		benchmarkName := strings.Join([]string{
+			"BenchmarkLoadgenKV",
+			fmt.Sprintf("readPercent=%d", *readPercent),
+			fmt.Sprintf("splits=%d", *splits),
+			fmt.Sprintf("concurrency=%d", *concurrency),
+			fmt.Sprintf("duration=%s", *duration),
+		}, "/")
+		// Output results that mimic Go's built-in benchmark format:
+		// https://github.com/golang/go/blob/release-branch.go1.9/src/testing/benchmark.go#L335:L353
+		if _, err := fmt.Fprintf(benchmarkOut, "%s\t%8d\t%d\n", benchmarkName, numOps, uint64(time.Since(start).Nanoseconds())/numOps); err != nil {
+			log.Fatalf("could not write benchmark results to %s: %s", *benchmarFileName, err)
+		}
 	}()
 
 	cumLatency := hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
