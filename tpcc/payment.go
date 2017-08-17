@@ -16,6 +16,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"math/rand"
@@ -106,64 +107,68 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 		d.cID = randCustomerID()
 	}
 
-	if err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-		var wName, dName string
-		// Update warehouse with payment
-		if err := tx.QueryRow(`
+	if err := crdb.ExecuteTx(
+		context.Background(),
+		db,
+		&sql.TxOptions{},
+		func(tx *sql.Tx) error {
+			var wName, dName string
+			// Update warehouse with payment
+			if err := tx.QueryRow(`
 				UPDATE warehouse
 				SET w_ytd = w_ytd + $1
 				WHERE w_id = $2
 				RETURNING w_name, wStreet1, wStreet2, wCity, wState, wZip`,
-			d.hAmount, wID,
-		).Scan(&wName, &d.wStreet1, &d.wStreet2, &d.wCity, &d.wState, &d.wZip); err != nil {
-			return err
-		}
+				d.hAmount, wID,
+			).Scan(&wName, &d.wStreet1, &d.wStreet2, &d.wCity, &d.wState, &d.wZip); err != nil {
+				return err
+			}
 
-		// Update district with payment
-		if err := tx.QueryRow(`
+			// Update district with payment
+			if err := tx.QueryRow(`
 				UPDATE district
 				SET d_ytd = d_ytd + $1
 				WHERE d_w_id = $2 AND dID = $3
 				RETURNING d_name, dStreet1, dStreet2, dCity, dState, dZip`,
-			d.hAmount, wID, d.dID,
-		).Scan(&dName, &d.dStreet1, &d.dStreet2, &d.dCity, &d.dState, &d.dZip); err != nil {
-			return err
-		}
+				d.hAmount, wID, d.dID,
+			).Scan(&dName, &d.dStreet1, &d.dStreet2, &d.dCity, &d.dState, &d.dZip); err != nil {
+				return err
+			}
 
-		// If we are selecting by last name, first find the relevant customer id and
-		// then proceed.
-		if d.cID == 0 {
-			// 2.5.2.2 Case 2: Pick the middle row, rounded up, from the selection by last name.
-			rows, err := tx.Query(`
+			// If we are selecting by last name, first find the relevant customer id and
+			// then proceed.
+			if d.cID == 0 {
+				// 2.5.2.2 Case 2: Pick the middle row, rounded up, from the selection by last name.
+				rows, err := tx.Query(`
 					SELECT cID
 					FROM customer
 					WHERE cWID = $1 AND cDID = $2 AND cLast = $3
 					ORDER BY cFirst ASC`,
-				wID, d.dID, d.cLast)
-			if err != nil {
-				return errors.Wrap(err, "select by last name fail")
-			}
-			customers := make([]int, 0, 1)
-			for rows.Next() {
-				var cID int
-				err = rows.Scan(&cID)
+					wID, d.dID, d.cLast)
 				if err != nil {
-					rows.Close()
-					return err
+					return errors.Wrap(err, "select by last name fail")
 				}
-				customers = append(customers, cID)
-			}
-			rows.Close()
-			cIdx := len(customers) / 2
-			if len(customers)%2 == 0 {
-				cIdx--
+				customers := make([]int, 0, 1)
+				for rows.Next() {
+					var cID int
+					err = rows.Scan(&cID)
+					if err != nil {
+						rows.Close()
+						return err
+					}
+					customers = append(customers, cID)
+				}
+				rows.Close()
+				cIdx := len(customers) / 2
+				if len(customers)%2 == 0 {
+					cIdx--
+				}
+
+				d.cID = customers[cIdx]
 			}
 
-			d.cID = customers[cIdx]
-		}
-
-		// Update customer with payment.
-		if err := tx.QueryRow(`
+			// Update customer with payment.
+			if err := tx.QueryRow(`
 				UPDATE customer
 				SET (cBalance, c_ytd_payment, c_payment_cnt) =
 					(cBalance - $1, c_ytd_payment + $1, c_payment_cnt + 1)
@@ -171,33 +176,33 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 				RETURNING cFirst, cMiddle, cLast, cStreet1, cStreet2,
 						  cCity, cState, cZip, cPhone, cSince, cCredit,
 						  cCreditLim, cDiscount, cBalance`,
-			d.hAmount, d.cWID, d.cDID, d.cID,
-		).Scan(&d.cFirst, &d.cMiddle, &d.cLast, &d.cStreet1, &d.cStreet2,
-			&d.cCity, &d.cState, &d.cZip, &d.cPhone, &d.cSince, &d.cCredit,
-			&d.cCreditLim, &d.cDiscount, &d.cBalance,
-		); err != nil {
-			return errors.Wrap(err, "select by customer idfail")
-		}
-
-		if d.cCredit == "BC" {
-			// If the customer has bad credit, update the customer's C_DATA.
-			d.cData = fmt.Sprintf("%d %d %d %d %d %f | %s", d.cID, d.cDID, d.cWID, d.dID, wID, d.hAmount, d.cData)
-			if len(d.cData) > 500 {
-				d.cData = d.cData[0:500]
+				d.hAmount, d.cWID, d.cDID, d.cID,
+			).Scan(&d.cFirst, &d.cMiddle, &d.cLast, &d.cStreet1, &d.cStreet2,
+				&d.cCity, &d.cState, &d.cZip, &d.cPhone, &d.cSince, &d.cCredit,
+				&d.cCreditLim, &d.cDiscount, &d.cBalance,
+			); err != nil {
+				return errors.Wrap(err, "select by customer idfail")
 			}
-		}
-		hData := fmt.Sprintf("%s    %s", wName, dName)
 
-		// Insert history line.
-		if _, err := tx.Exec(`
+			if d.cCredit == "BC" {
+				// If the customer has bad credit, update the customer's C_DATA.
+				d.cData = fmt.Sprintf("%d %d %d %d %d %f | %s", d.cID, d.cDID, d.cWID, d.dID, wID, d.hAmount, d.cData)
+				if len(d.cData) > 500 {
+					d.cData = d.cData[0:500]
+				}
+			}
+			hData := fmt.Sprintf("%s    %s", wName, dName)
+
+			// Insert history line.
+			if _, err := tx.Exec(`
 				INSERT INTO history (h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, h_data)
 				VALUES ($1, $2, $3, $4, $5, $6)`,
-			d.cID, d.cDID, d.cWID, d.dID, wID, hData,
-		); err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
+				d.cID, d.cDID, d.cWID, d.dID, wID, hData,
+			); err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
 		return nil, err
 	}
 	return d, nil

@@ -19,6 +19,8 @@ import (
 	"database/sql"
 	"math/rand"
 
+	"context"
+
 	"github.com/cockroachdb/cockroach-go/crdb"
 )
 
@@ -55,20 +57,24 @@ func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
 		dID:       rand.Intn(9) + 1,
 	}
 
-	if err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-		var dNextOID int
-		if err := tx.QueryRow(`
+	if err := crdb.ExecuteTx(
+		context.Background(),
+		db,
+		&sql.TxOptions{},
+		func(tx *sql.Tx) error {
+			var dNextOID int
+			if err := tx.QueryRow(`
 				SELECT d_next_o_id
 				FROM district
 				WHERE d_w_id = $1 AND dID = $2`,
-			wID, d.dID,
-		).Scan(&dNextOID); err != nil {
-			return err
-		}
+				wID, d.dID,
+			).Scan(&dNextOID); err != nil {
+				return err
+			}
 
-		// Count the number of recently sold items that have a stock level below
-		// the threshold.
-		if err := tx.QueryRow(`
+			// Count the number of recently sold items that have a stock level below
+			// the threshold.
+			if err := tx.QueryRow(`
 				SELECT COUNT(DISTINCT(s_i_id))
 				FROM order_line
 				JOIN stock
@@ -78,12 +84,12 @@ func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
 				  AND ol_o_id BETWEEN $3 - 20 AND $3 - 1
 				  AND s_w_id = $1
 				  AND s_quantity < $4`,
-			wID, d.dID, dNextOID, d.threshold,
-		).Scan(&d.lowStock); err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
+				wID, d.dID, dNextOID, d.threshold,
+			).Scan(&d.lowStock); err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
 		return nil, err
 	}
 	return d, nil
