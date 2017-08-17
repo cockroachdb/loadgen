@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"context"
+
 	"github.com/cockroachdb/cockroach-go/crdb"
 	"github.com/lib/pq"
 )
@@ -116,58 +118,62 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 
 	d.oEntryD = time.Now()
 
-	err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-		// Select the warehouse tax rate.
-		if err := tx.QueryRow(
-			`SELECT w_tax FROM warehouse WHERE w_id = $1`,
-			wID,
-		).Scan(&d.wTax); err != nil {
-			return err
-		}
+	err := crdb.ExecuteTx(
+		context.Background(),
+		db,
+		&sql.TxOptions{},
+		func(tx *sql.Tx) error {
+			// Select the warehouse tax rate.
+			if err := tx.QueryRow(
+				`SELECT w_tax FROM warehouse WHERE w_id = $1`,
+				wID,
+			).Scan(&d.wTax); err != nil {
+				return err
+			}
 
-		// Select the district tax rate and next available order number, bumping it.
-		var dNextOID int
-		if err := tx.QueryRow(`
+			// Select the district tax rate and next available order number, bumping it.
+			var dNextOID int
+			if err := tx.QueryRow(`
 				UPDATE district
 				SET d_next_o_id = d_next_o_id + 1
 				WHERE d_w_id = $1 AND dID = $2
 				RETURNING d_tax, d_next_o_id`,
-			d.wID, d.dID,
-		).Scan(&d.dTax, &dNextOID); err != nil {
-			return err
-		}
+				d.wID, d.dID,
+			).Scan(&d.dTax, &dNextOID); err != nil {
+				return err
+			}
 
-		d.oID = dNextOID - 1
+			d.oID = dNextOID - 1
 
-		// Select the customer's discount, last name and credit.
-		if err := tx.QueryRow(`
+			// Select the customer's discount, last name and credit.
+			if err := tx.QueryRow(`
 				SELECT cDiscount, cLast, cCredit
 				FROM customer
 				WHERE cWID = $1 AND cDID = $2 AND cID = $3`,
-			d.wID, d.dID, d.cID,
-		).Scan(&d.cDiscount, &d.cLast, &d.cCredit); err != nil {
-			return err
-		}
+				d.wID, d.dID, d.cID,
+			).Scan(&d.cDiscount, &d.cLast, &d.cCredit); err != nil {
+				return err
+			}
 
-		// Insert row into the orders and new orders table.
-		if _, err := tx.Exec(`
+			// Insert row into the orders and new orders table.
+			if _, err := tx.Exec(`
 				INSERT INTO "order" (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local)
 				VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			d.oID, d.dID, d.wID, d.cID, d.oEntryD, d.oOlCnt, allLocal); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`
+				d.oID, d.dID, d.wID, d.cID, d.oEntryD, d.oOlCnt, allLocal); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`
 				INSERT INTO new_order (no_o_id, no_d_id, no_w_id) 
 				VALUES ($1, $2, $3)`,
-			d.oID, d.dID, d.wID); err != nil {
-			return err
-		}
+				d.oID, d.dID, d.wID); err != nil {
+				return err
+			}
 
-		selectItem, err := tx.Prepare(`SELECT i_price, i_name, i_data FROM item WHERE i_id=$1`)
-		if err != nil {
-			return err
-		}
-		updateStock, err := tx.Prepare(fmt.Sprintf(`
+			selectItem, err := tx.Prepare(`SELECT i_price, i_name, i_data FROM item WHERE i_id=$1`)
+			if err != nil {
+				return err
+			}
+			updateStock, err := tx.Prepare(fmt.Sprintf(`
 			UPDATE stock
 			SET (s_quantity, s_ytd, s_order_cnt, s_remote_cnt) =
 				(CASE s_quantity >= $1 + 10 WHEN true THEN s_quantity-$1 ELSE (s_quantity-$1)+91 END,
@@ -176,66 +182,66 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 				 s_remote_cnt + (CASE $2::bool WHEN true THEN 1 ELSE 0 END))
 			WHERE s_i_id=$3 AND s_w_id=$4
 			RETURNING s_dist_%02d, s_data`, d.dID))
-		if err != nil {
-			return err
-		}
-		insertOrderLine, err := tx.Prepare(`
+			if err != nil {
+				return err
+			}
+			insertOrderLine, err := tx.Prepare(`
 			INSERT INTO order_line(ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_dist_info)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`)
-		if err != nil {
-			return err
-		}
+			if err != nil {
+				return err
+			}
 
-		var iData string
-		// 2.4.2.2: For each o_ol_cnt item in the order, query the relevant item
-		// row, update the stock row to account for the order, and insert a new
-		// line into the order_line table to reflect the item on the order.
-		for i, item := range d.items {
-			if err := selectItem.QueryRow(item.olIID).Scan(&item.iPrice, &item.iName, &iData); err != nil {
-				if rollback && item.olIID < 0 {
-					// 2.4.2.3: roll back when we're expecting a rollback due to
-					// simulated user error (invalid item id) and we actually
-					// can't find the item. The spec requires us to actually go
-					// to the database for this, even though we know earlier
-					// that the item has an invalid number.
-					return errSimulated
+			var iData string
+			// 2.4.2.2: For each o_ol_cnt item in the order, query the relevant item
+			// row, update the stock row to account for the order, and insert a new
+			// line into the order_line table to reflect the item on the order.
+			for i, item := range d.items {
+				if err := selectItem.QueryRow(item.olIID).Scan(&item.iPrice, &item.iName, &iData); err != nil {
+					if rollback && item.olIID < 0 {
+						// 2.4.2.3: roll back when we're expecting a rollback due to
+						// simulated user error (invalid item id) and we actually
+						// can't find the item. The spec requires us to actually go
+						// to the database for this, even though we know earlier
+						// that the item has an invalid number.
+						return errSimulated
+					}
+					return err
 				}
-				return err
-			}
 
-			var distInfo, sData string
-			if err := updateStock.QueryRow(
-				item.olQuantity, item.remoteWarehouse, item.olIID, item.olSupplyWID,
-			).Scan(&distInfo, &sData); err != nil {
-				return err
-			}
-			if strings.Contains(sData, originalString) && strings.Contains(iData, originalString) {
-				item.brandGeneric = "B"
-			} else {
-				item.brandGeneric = "G"
-			}
+				var distInfo, sData string
+				if err := updateStock.QueryRow(
+					item.olQuantity, item.remoteWarehouse, item.olIID, item.olSupplyWID,
+				).Scan(&distInfo, &sData); err != nil {
+					return err
+				}
+				if strings.Contains(sData, originalString) && strings.Contains(iData, originalString) {
+					item.brandGeneric = "B"
+				} else {
+					item.brandGeneric = "G"
+				}
 
-			item.olAmount = float64(item.olQuantity) * item.iPrice
-			d.totalAmount += item.olAmount
-			if _, err := insertOrderLine.Exec(
-				d.oID, // ol_o_id
-				d.dID,
-				d.wID,
-				i+1, // ol_number is a counter over the items in the order.
-				item.olIID,
-				item.olSupplyWID,
-				item.olQuantity,
-				item.olAmount,
-				distInfo, // ol_dist_info is set to the contents of s_dist_xx
-			); err != nil {
-				return err
+				item.olAmount = float64(item.olQuantity) * item.iPrice
+				d.totalAmount += item.olAmount
+				if _, err := insertOrderLine.Exec(
+					d.oID, // ol_o_id
+					d.dID,
+					d.wID,
+					i+1, // ol_number is a counter over the items in the order.
+					item.olIID,
+					item.olSupplyWID,
+					item.olQuantity,
+					item.olAmount,
+					distInfo, // ol_dist_info is set to the contents of s_dist_xx
+				); err != nil {
+					return err
+				}
 			}
-		}
-		// 2.4.2.2: total_amount = sum(OL_AMOUNT) * (1 - C_DISCOUNT) * (1 + W_TAX + D_TAX)
-		d.totalAmount *= (1 - d.cDiscount) * (1 + d.wTax + d.dTax)
+			// 2.4.2.2: total_amount = sum(OL_AMOUNT) * (1 - C_DISCOUNT) * (1 + W_TAX + D_TAX)
+			d.totalAmount *= (1 - d.cDiscount) * (1 + d.wTax + d.dTax)
 
-		return nil
-	})
+			return nil
+		})
 	if err == errSimulated {
 		return d, nil
 	}
