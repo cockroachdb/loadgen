@@ -5,9 +5,10 @@
   branch = "master"
   name = "github.com/cockroachdb/cockroach-go"
   packages = ["crdb"]
-  revision = "c8f63e30437f4b80673b631763130d0fef87dd76"
+  revision = "c806b484b8611fc587b6abc07f8bb0f7824a78d6"
 
 [[projects]]
+  branch = "master"
   name = "github.com/codahale/hdrhistogram"
   packages = ["."]
   revision = "3a0bb77429bd3a61596f5e8a3172445844342120"
@@ -16,7 +17,7 @@
   branch = "master"
   name = "github.com/gocql/gocql"
   packages = [".","internal/lru","internal/murmur","internal/streams"]
-  revision = "05df4896cf271375039b0645117594e861bde0d9"
+  revision = "b9337fa4c59ce1db20300290bd7a9a7063fb6784"
 
 [[projects]]
   branch = "master"
@@ -52,7 +53,7 @@
   branch = "master"
   name = "github.com/lib/pq"
   packages = [".","oid"]
-  revision = "2704adc878c21e1329f46f6e56a1c387d788ff94"
+  revision = "e42267488fe361b9dc034be7a6bffef5b195bceb"
 
 [[projects]]
   branch = "master"
@@ -64,13 +65,13 @@
   branch = "master"
   name = "golang.org/x/net"
   packages = ["context"]
-  revision = "4971afdc2f162e82d185353533d3cf16188a9f4e"
+  revision = "1c05540f6879653db88113bc4a2b70aec4bd491f"
 
 [[projects]]
   branch = "master"
   name = "golang.org/x/time"
   packages = ["rate"]
-  revision = "f51c12702a4d776e4c1fa9b0fabab841babae631"
+  revision = "8be79e1e0910c292df4e79c241bb7e8f7e725959"
 
 [[projects]]
   branch = "master"
@@ -79,10 +80,10 @@
   revision = "84a35ef54dff3c5596983e180ec10919fc432242"
 
 [[projects]]
-  branch = "master"
   name = "gopkg.in/inf.v0"
   packages = ["."]
   revision = "3887ee99ecf07df5b447e9b00d9c0b2adaa9f3e4"
+  version = "v0.9.0"
 
 [[projects]]
   branch = "v2"
