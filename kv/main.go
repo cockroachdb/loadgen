@@ -586,7 +586,7 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
-	dbURL := "postgres://root@localhost:26257/photos?sslmode=disable"
+	dbURL := "postgres://root@localhost:26257/test?sslmode=disable"
 	if flag.NArg() == 1 {
 		dbURL = flag.Arg(0)
 	}
