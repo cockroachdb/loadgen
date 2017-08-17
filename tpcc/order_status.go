@@ -77,7 +77,7 @@ func (o orderStatus) run(db *sql.DB, wID int) (interface{}, error) {
 	if err := crdb.ExecuteTx(
 		context.Background(),
 		db,
-		&sql.TxOptions{},
+		&sql.TxOptions{Isolation: sql.LevelSerializable},
 		func(tx *sql.Tx) error {
 			// 2.6.2.2 explains this entire transaction.
 

@@ -110,7 +110,7 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 	if err := crdb.ExecuteTx(
 		context.Background(),
 		db,
-		&sql.TxOptions{},
+		&sql.TxOptions{Isolation: sql.LevelSerializable},
 		func(tx *sql.Tx) error {
 			var wName, dName string
 			// Update warehouse with payment
