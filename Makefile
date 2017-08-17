@@ -20,6 +20,9 @@ GOFLAGS :=
 # Set to 1 to use static linking for all builds (including tests).
 STATIC :=
 
+PKG := kv ycsb tpcc tpch
+GOPKG := $(patsubst %,./%,$(PKG))
+
 ifeq ($(STATIC),1)
 LDFLAGS += -extldflags "-static"
 endif
@@ -29,38 +32,41 @@ all: build test check
 
 .PHONY: test
 test:
-	$(GO) test -v -i ./...
-	$(GO) test -v ./...
+	$(GO) test -v -i $(GOPKG)
+	$(GO) test -v $(GOPKG)
 
 .PHONY: deps
 deps:
-	$(GO) get -u github.com/kisielk/errcheck
-	$(GO) get -d -t ./...
+	GOBIN=$(abspath  bin) $(GO) install -v \
+		./vendor/github.com/golang/lint/golint \
+		./vendor/github.com/kisielk/errcheck \
+		./vendor/golang.org/x/tools/cmd/goimports
+
 
 .PHONY: build
-build: deps kv ycsb tpcc tpch
+build: deps $(PKG)
 
-.PHONY: kv ycsb tpcc tpch
-kv ycsb tpcc tpch:
+.PHONY: $(PKG)
+$(PKG):
 	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o $@/$@ ./$@
 
 .PHONY: check
 check:
 	@echo "checking for tabs in shell scripts"
-	@! git grep -F '	' -- '*.sh'
+	@! git grep -F '	' -- ':!vendor' '*.sh'
 	@echo "checking for \"path\" imports"
-	@! git grep -F '"path"' -- '*.go'
+	@! git grep -F '"path"' -- ':!vendor' '*.go'
 	@echo "errcheck"
-	@errcheck -exclude errcheck_excludes.txt ./...
+	@./bin/errcheck -exclude errcheck_excludes.txt $(GOPKG)
 	@echo "vet"
-	@! go tool vet . 2>&1 | \
+	@! go tool vet $(PKG) 2>&1 | \
 	  grep -vE '^vet: cannot process directory .git'
 	@echo "vet --shadow"
-	@! go tool vet --shadow . 2>&1 | \
+	@! go tool vet --shadow $(PKG) 2>&1 | \
 	  grep -vE '(declaration of err shadows|^vet: cannot process directory \.git)'
 	@echo "golint"
-	@! golint ./... | grep -vE '(\.pb\.go|_string)'
+	@! ./bin/golint $(PKG) | grep -vE '(\.pb\.go|_string)'
 	@echo "gofmt (simplify)"
-	@! gofmt -s -d -l . 2>&1 | grep -vE '^\.git/'
+	@! gofmt -s -d -l $(PKG) 2>&1 | grep -vE '^\.git/'
 	@echo "goimports"
-	@! goimports -l . | grep -vF 'No Exceptions'
+	@! ./bin/goimports -l $(PKG) | grep -vF 'No Exceptions'

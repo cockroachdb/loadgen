@@ -2,10 +2,7 @@
 
 set -euxo pipefail
 
-VERSION=$(git describe || git rev-parse --short HEAD)
-
-# Don't do this in Docker to avoid creating root-owned directories in GOPATH.
-make deps
+VERSION=$(git describe 2>/dev/null || git rev-parse --short HEAD)
 
 echo "Deploying ${VERSION}..."
 aws configure set region us-east-1
@@ -37,7 +34,6 @@ function push_one_binary {
 for proj in kv ycsb tpch tpcc ; do
     docker run \
         --workdir=/go/src/github.com/cockroachdb/loadgen \
-        --volume="${GOPATH%%:*}/src":/go/src \
         --volume="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)":/go/src/github.com/cockroachdb/loadgen \
         --rm \
         cockroachdb/builder:20170422-212842 make ${proj} STATIC=1

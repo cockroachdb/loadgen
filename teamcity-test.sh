@@ -2,9 +2,6 @@
 
 set -euxo pipefail
 
-# Don't do this in Docker to avoid creating root-owned directories in GOPATH.
-make deps
-
 docker run \
     --workdir=/go/src/github.com/cockroachdb/loadgen \
     --volume="${GOPATH%%:*}/src":/go/src \
