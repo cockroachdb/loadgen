@@ -80,7 +80,7 @@ func generateData(db *sql.DB) {
 INSERT INTO item (i_id, i_im_id, i_name, i_price, i_data)
 VALUES ($1, $2, $3, $4, $5)`)
 	stmtWarehouse := prepare(db, `
-INSERT INTO warehouse (w_id, w_name, wStreet1, wStreet2, wCity, wState, wZip, w_tax, w_ytd)
+INSERT INTO warehouse (w_id, w_name, w_street_1, w_street_2, w_city, w_state, w_zip, w_tax, w_ytd)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`)
 	stmtStock := prepare(db, `
 INSERT INTO stock (
@@ -90,19 +90,19 @@ INSERT INTO stock (
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`)
 	stmtDistrict := prepare(db, `
 INSERT INTO district (
-	dID, d_w_id, d_name, dStreet1, dStreet2,
-	dCity, dState, dZip, d_tax, d_ytd, d_next_o_id)
+	d_id, d_w_id, d_name, d_street_1, d_street_2,
+	d_city, d_state, d_zip, d_tax, d_ytd, d_next_o_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 	stmtCustomer := prepare(db, `
 INSERT INTO customer (
-	cID, cDID, cWID, cFirst, cMiddle, cLast,
-	cStreet1, cStreet2, cCity, cState, cZip,
-	cPhone, cSince, cCredit, cCreditLim, cDiscount,
-	cBalance, c_ytd_payment, c_payment_cnt,
-	c_delivery_cnt, cData)
+	c_id, c_d_id, c_w_id, c_first, c_middle, c_last,
+	c_street_1, c_street_2, c_city, c_state, c_zip,
+	c_phone, c_since, c_credit, c_credit_lim, c_discount,
+	c_balance, c_ytd_payment, c_payment_cnt,
+	c_delivery_cnt, c_data)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`)
 	stmtHistory := prepare(db, `
-INSERT INTO history (h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, hDate, hAmount, h_data)
+INSERT INTO history (h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, h_date, h_amount, h_data)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
 	stmtOrder := prepare(db, `
 INSERT INTO "order" (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_carrier_id, o_ol_cnt, o_all_local)

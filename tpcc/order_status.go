@@ -85,9 +85,9 @@ func (o orderStatus) run(db *sql.DB, wID int) (interface{}, error) {
 			if d.cID != 0 {
 				// Case 1: select by customer id
 				if err := tx.QueryRow(`
-					SELECT cBalance, cFirst, cMiddle, cLast
+					SELECT c_balance, c_first, c_middle, c_last
 					FROM customer
-					WHERE cWID = $1 AND cDID = $2 AND cID = $3`,
+					WHERE c_w_id = $1 AND c_d_id = $2 AND c_id = $3`,
 					wID, d.dID, d.cID,
 				).Scan(&d.cBalance, &d.cFirst, &d.cMiddle, &d.cLast); err != nil {
 					return errors.Wrap(err, "select by customer idfail")
@@ -95,10 +95,10 @@ func (o orderStatus) run(db *sql.DB, wID int) (interface{}, error) {
 			} else {
 				// Case 2: Pick the middle row, rounded up, from the selection by last name.
 				rows, err := tx.Query(`
-					SELECT cID, cBalance, cFirst, cMiddle
+					SELECT c_id, c_balance, c_first, c_middle
 					FROM customer
-					WHERE cWID = $1 AND cDID = $2 AND cLast = $3
-					ORDER BY cFirst ASC`,
+					WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
+					ORDER BY c_first ASC`,
 					wID, d.dID, d.cLast)
 				if err != nil {
 					return errors.Wrap(err, "select by last name fail")

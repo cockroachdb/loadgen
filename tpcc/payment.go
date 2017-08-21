@@ -118,7 +118,7 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 				UPDATE warehouse
 				SET w_ytd = w_ytd + $1
 				WHERE w_id = $2
-				RETURNING w_name, wStreet1, wStreet2, wCity, wState, wZip`,
+				RETURNING w_name, w_street_1, w_street_2, w_city, w_state, w_zip`,
 				d.hAmount, wID,
 			).Scan(&wName, &d.wStreet1, &d.wStreet2, &d.wCity, &d.wState, &d.wZip); err != nil {
 				return err
@@ -128,8 +128,8 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 			if err := tx.QueryRow(`
 				UPDATE district
 				SET d_ytd = d_ytd + $1
-				WHERE d_w_id = $2 AND dID = $3
-				RETURNING d_name, dStreet1, dStreet2, dCity, dState, dZip`,
+				WHERE d_w_id = $2 AND d_id = $3
+				RETURNING d_name, d_street_1, d_street_2, d_city, d_state, d_zip`,
 				d.hAmount, wID, d.dID,
 			).Scan(&dName, &d.dStreet1, &d.dStreet2, &d.dCity, &d.dState, &d.dZip); err != nil {
 				return err
@@ -140,10 +140,10 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 			if d.cID == 0 {
 				// 2.5.2.2 Case 2: Pick the middle row, rounded up, from the selection by last name.
 				rows, err := tx.Query(`
-					SELECT cID
+					SELECT c_id
 					FROM customer
-					WHERE cWID = $1 AND cDID = $2 AND cLast = $3
-					ORDER BY cFirst ASC`,
+					WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
+					ORDER BY c_first ASC`,
 					wID, d.dID, d.cLast)
 				if err != nil {
 					return errors.Wrap(err, "select by last name fail")
@@ -170,12 +170,12 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 			// Update customer with payment.
 			if err := tx.QueryRow(`
 				UPDATE customer
-				SET (cBalance, c_ytd_payment, c_payment_cnt) =
-					(cBalance - $1, c_ytd_payment + $1, c_payment_cnt + 1)
-				WHERE cWID = $2 AND cDID = $3 AND cID = $4
-				RETURNING cFirst, cMiddle, cLast, cStreet1, cStreet2,
-						  cCity, cState, cZip, cPhone, cSince, cCredit,
-						  cCreditLim, cDiscount, cBalance`,
+				SET (c_balance, c_ytd_payment, c_payment_cnt) =
+					(c_balance - $1, c_ytd_payment + $1, c_payment_cnt + 1)
+				WHERE c_w_id = $2 AND c_d_id = $3 AND c_id = $4
+				RETURNING c_first, c_middle, c_last, c_street_1, c_street_2,
+						  c_city, c_state, c_zip, c_phone, c_since, c_credit,
+						  c_credit_lim, c_discount, c_balance`,
 				d.hAmount, d.cWID, d.cDID, d.cID,
 			).Scan(&d.cFirst, &d.cMiddle, &d.cLast, &d.cStreet1, &d.cStreet2,
 				&d.cCity, &d.cState, &d.cZip, &d.cPhone, &d.cSince, &d.cCredit,
