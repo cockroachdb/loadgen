@@ -17,8 +17,11 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"math/rand"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,15 +70,54 @@ type tx struct {
 	numOps uint64
 }
 
-// The weights should add to 100. They match the TPCC spec - so probably don't
-// tune these. Keep this in the same order as the const type enum above, since
-// it's used as a map from tx type to struct.
+// Keep this in the same order as the const type enum above, since it's used as a map from tx type
+// to struct.
 var txs = [...]tx{
-	newOrderType:    {tpccTx: newOrder{}, weight: 45, name: "tpmC"},
-	paymentType:     {tpccTx: payment{}, weight: 43, name: "payment"},
-	orderStatusType: {tpccTx: orderStatus{}, weight: 4, name: "orderStatus"},
-	deliveryType:    {tpccTx: delivery{}, weight: 4, name: "delivery"},
-	stockLevelType:  {tpccTx: stockLevel{}, weight: 4, name: "stockLevel"},
+	newOrderType:    {tpccTx: newOrder{}, name: "tpmC"},
+	paymentType:     {tpccTx: payment{}, name: "payment"},
+	orderStatusType: {tpccTx: orderStatus{}, name: "orderStatus"},
+	deliveryType:    {tpccTx: delivery{}, name: "delivery"},
+	stockLevelType:  {tpccTx: stockLevel{}, name: "stockLevel"},
+}
+
+var totalWeight int
+
+func initializeMix() {
+	nameToTx := make(map[string]txType)
+	for i, tx := range txs {
+		nameToTx[tx.name] = txType(i)
+	}
+
+	items := strings.Split(*mix, ",")
+	for _, item := range items {
+		kv := strings.Split(item, "=")
+		if len(kv) != 2 {
+			log.Fatalf("Invalid mix %s: %s is not a k=v pair", *mix, item)
+		}
+		txName, weightStr := kv[0], kv[1]
+
+		weight, err := strconv.Atoi(weightStr)
+		if err != nil {
+			log.Fatalf("Invalid percentage mix %s: %s is not an integer", *mix, weightStr)
+		}
+
+		txIdx, ok := nameToTx[txName]
+		if !ok {
+			log.Fatalf("Invalid percentage mix %s: no such transaction %s", *mix, txName)
+		}
+
+		txs[txIdx].weight = weight
+		totalWeight += weight
+	}
+	if *verbose {
+		scaleFactor := 100.0 / float64(totalWeight)
+
+		fmt.Printf("Running with mix ")
+		for _, tx := range txs {
+			fmt.Printf("%s=%.0f%% ", tx.name, float64(tx.weight)*scaleFactor)
+		}
+		fmt.Printf("\n")
+	}
 }
 
 func newWorker(db *sql.DB, wg *sync.WaitGroup) *worker {
@@ -95,13 +137,13 @@ func newWorker(db *sql.DB, wg *sync.WaitGroup) *worker {
 func (w *worker) run(errCh chan<- error, wg *sync.WaitGroup) {
 	for {
 		start := time.Now()
-		transactionType := rand.Intn(100)
-		weightTotal := 0
+		transactionType := rand.Intn(totalWeight)
+		weightSum := 0
 		var i int
 		var t tx
 		for i, t = range txs {
-			weightTotal += t.weight
-			if transactionType < weightTotal {
+			weightSum += t.weight
+			if transactionType < weightSum {
 				break
 			}
 		}
