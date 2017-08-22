@@ -19,6 +19,8 @@ import (
 	"database/sql"
 	"log"
 	"math/rand"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,6 +78,27 @@ var txs = [...]tx{
 	orderStatusType: {tpccTx: orderStatus{}, weight: 4, name: "orderStatus"},
 	deliveryType:    {tpccTx: delivery{}, weight: 4, name: "delivery"},
 	stockLevelType:  {tpccTx: stockLevel{}, weight: 4, name: "stockLevel"},
+}
+
+func initializeMix() {
+	if *overrideMix != "" {
+		percentStrs := strings.Split(*overrideMix, ",")
+		if len(percentStrs) != 5 {
+			log.Fatalf("Invalid percentage mix %s: need 5 percentages", percentStrs)
+		}
+		totalWeight := 0
+		for i, str := range percentStrs {
+			weight, err := strconv.Atoi(str)
+			if err != nil {
+				log.Fatalf("Invalid percentage mix %s: %s is not an integer", percentStrs, str)
+			}
+			txs[i].weight = weight
+			totalWeight += weight
+		}
+		if totalWeight != 100 {
+			log.Fatalf("Invalid percentage mix %s: didn't add up to 100", percentStrs)
+		}
+	}
 }
 
 func newWorker(db *sql.DB, wg *sync.WaitGroup) *worker {

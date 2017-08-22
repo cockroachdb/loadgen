@@ -43,6 +43,8 @@ var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error"
 var verbose = flag.Bool("v", false, "Print verbose debug output")
 var warehouses = flag.Int("warehouses", 1, "number of warehouses for loading")
 
+var overrideMix = flag.String("override-mix", "", "Override transaction mix with a , delimited list of percentages")
+
 const (
 	minLatency = 100 * time.Microsecond
 	maxLatency = 10 * time.Second
@@ -111,6 +113,8 @@ func main() {
 		loadSchema(db)
 		generateData(db)
 	}
+
+	initializeMix()
 
 	start := time.Now()
 	errCh := make(chan error)
