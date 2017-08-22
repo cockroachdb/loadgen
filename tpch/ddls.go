@@ -57,20 +57,20 @@ var tableNames = [...]string{
 var createStmts = [...]string{
 	nation: `
     CREATE TABLE nation  (
-      n_nationkey       INTEGER NOT NULL,
+      n_nationkey       INTEGER NOT NULL PRIMARY KEY,
       n_name            CHAR(25) NOT NULL,
       n_regionkey       INTEGER NOT NULL,
       n_comment         VARCHAR(152)
 		);`,
 	region: `
     CREATE TABLE region  (
-      r_regionkey       INTEGER NOT NULL,
+      r_regionkey       INTEGER NOT NULL PRIMARY KEY,
       r_name            CHAR(25) NOT NULL,
       r_comment         VARCHAR(152)
     )`,
 	part: `
     CREATE TABLE part  (
-      p_partkey         INTEGER NOT NULL,
+      p_partkey         INTEGER NOT NULL PRIMARY KEY,
       p_name            VARCHAR(55) NOT NULL,
       p_mfgr            CHAR(25) NOT NULL,
       p_brand           CHAR(10) NOT NULL,
@@ -82,7 +82,7 @@ var createStmts = [...]string{
     )`,
 	supplier: `
     CREATE TABLE supplier (
-      s_suppkey         INTEGER NOT NULL,
+      s_suppkey         INTEGER NOT NULL PRIMARY KEY,
       s_name            CHAR(25) NOT NULL,
       s_address         VARCHAR(40) NOT NULL,
       s_nationkey       INTEGER NOT NULL,
@@ -96,11 +96,12 @@ var createStmts = [...]string{
       ps_suppkey            INTEGER NOT NULL,
       ps_availqty           INTEGER NOT NULL,
       ps_supplycost         DECIMAL(15,2) NOT NULL,
-      ps_comment            VARCHAR(199) NOT NULL
+      ps_comment            VARCHAR(199) NOT NULL,
+      PRIMARY KEY (ps_partkey, ps_suppkey)
     )`,
 	customer: `
 	CREATE TABLE customer (
-      c_custkey         INTEGER NOT NULL,
+      c_custkey         INTEGER NOT NULL PRIMARY KEY,
       c_name            VARCHAR(25) NOT NULL,
       c_address         VARCHAR(40) NOT NULL,
       c_nationkey       INTEGER NOT NULL,
@@ -111,7 +112,7 @@ var createStmts = [...]string{
     )`,
 	orders: `
     CREATE TABLE orders  (
-      o_orderkey           INTEGER NOT NULL,
+      o_orderkey           INTEGER NOT NULL PRIMARY KEY,
       o_custkey            INTEGER NOT NULL,
       o_orderstatus        CHAR(1) NOT NULL,
       o_totalprice         DECIMAL(15,2) NOT NULL,
@@ -156,24 +157,15 @@ var dropStmts = [...]string{
 var createIndexStmts = [...]string{
 	// nation
 	`CREATE INDEX        n_rk ON nation (n_regionkey ASC)`,
-	`CREATE UNIQUE INDEX n_nk ON nation (n_nationkey ASC)`,
-	// region
-	`CREATE UNIQUE INDEX r_rk ON region (r_regionkey ASC)`,
-	// part
-	`CREATE UNIQUE INDEX p_pk ON part (p_partkey ASC)`,
 	// supplier
-	`CREATE UNIQUE INDEX s_sk ON supplier (s_suppkey ASC)`,
 	`CREATE INDEX        s_nk ON supplier (s_nationkey ASC)`,
 	// partsupp
 	`CREATE INDEX ps_pk ON partsupp (ps_partkey ASC)`,
 	`CREATE INDEX ps_sk ON partsupp (ps_suppkey ASC)`,
-	`CREATE UNIQUE INDEX ps_pk_sk ON partsupp (ps_partkey ASC, ps_suppkey ASC)`,
 	`CREATE UNIQUE INDEX ps_sk_pk ON partsupp (ps_suppkey ASC, ps_partkey ASC)`,
 	// customer
-	`CREATE UNIQUE INDEX c_ck ON customer (c_custkey ASC)`,
 	`CREATE INDEX c_nk ON customer (c_nationkey ASC)`,
 	// orders
-	`CREATE UNIQUE INDEX o_ok ON orders (o_orderkey ASC)`,
 	`CREATE INDEX        o_ck ON orders (o_custkey ASC)`,
 	`CREATE INDEX        o_od ON orders (o_orderdate ASC)`,
 	// lineitem
