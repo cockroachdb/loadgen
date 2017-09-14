@@ -100,7 +100,7 @@ func main() {
 	}
 
 	if *drop {
-		if _, err := db.Exec("DROP DATABASE tpcc"); err != nil {
+		if _, err := db.Exec("DROP DATABASE tpcc CASCADE"); err != nil {
 			fmt.Println("couldn't drop database:", err)
 		}
 		if _, err := db.Exec("CREATE DATABASE tpcc"); err != nil {
