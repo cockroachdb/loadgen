@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/codahale/hdrhistogram"
+	"github.com/pkg/errors"
 )
 
 type worker struct {
@@ -148,7 +149,7 @@ func (w *worker) run(errCh chan<- error, wg *sync.WaitGroup) {
 			}
 		}
 		if _, err := t.run(w.db, rand.Intn(*warehouses)); err != nil {
-			errCh <- err
+			errCh <- errors.Wrapf(err, "error in %s", t.name)
 			continue
 		}
 		elapsed := clampLatency(time.Since(start), minLatency, maxLatency).Nanoseconds()

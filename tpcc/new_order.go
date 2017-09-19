@@ -17,7 +17,6 @@ package main
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/cockroachdb/cockroach-go/crdb"
 	"github.com/lib/pq"
+	"github.com/pkg/errors"
 )
 
 // From the TPCC spec, section 2.4:
