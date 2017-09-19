@@ -36,6 +36,7 @@ import (
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of concurrent writers inserting blocks")
 var drop = flag.Bool("drop", false, "Drop the database and recreate")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
+var interleave = flag.Bool("interleave", false, "Use interleaved data")
 var load = flag.Bool("load", false, "Generate fresh TPCC data. Use with -drop")
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of operations to run")
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just tpmC")
@@ -88,7 +89,12 @@ func main() {
 		fmt.Fprintf(os.Stdout, "Starting TPC-C load generator\n")
 	}
 
-	dbURL := "postgresql://root@localhost:26257/tpcc?sslmode=disable"
+	dbName := "tpcc"
+	if *interleave {
+		dbName = "tpccinterleaved"
+	}
+
+	dbURL := fmt.Sprintf("postgresql://root@localhost:26257/%s?sslmode=disable", dbName)
 	if flag.NArg() == 1 {
 		dbURL = flag.Arg(0)
 	}
@@ -100,17 +106,17 @@ func main() {
 	}
 
 	if *drop {
-		if _, err := db.Exec("DROP DATABASE tpcc CASCADE"); err != nil {
+		if _, err := db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", dbName)); err != nil {
 			fmt.Println("couldn't drop database:", err)
-		}
-		if _, err := db.Exec("CREATE DATABASE tpcc"); err != nil {
-			fmt.Println("couldn't recreate database:", err)
-			os.Exit(1)
 		}
 	}
 
 	if *load {
-		loadSchema(db)
+		if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS " + dbName); err != nil {
+			fmt.Println("couldn't create database:", err)
+			os.Exit(1)
+		}
+		loadSchema(db, *interleave)
 		generateData(db)
 	}
 
