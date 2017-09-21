@@ -38,6 +38,7 @@ var drop = flag.Bool("drop", false, "Drop the database and recreate")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
 var interleave = flag.Bool("interleave", false, "Use interleaved data")
 var load = flag.Bool("load", false, "Generate fresh TPCC data. Use with -drop")
+var loadIndexes = flag.Bool("loadIndexes", false, "Load indexes. Implied by load. Don't need to use this normally.")
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of operations to run")
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just tpmC")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
@@ -116,8 +117,14 @@ func main() {
 			fmt.Println("couldn't create database:", err)
 			os.Exit(1)
 		}
-		loadSchema(db, *interleave)
+		loadSchema(db, *interleave, false)
 		generateData(db)
+	}
+
+	if *load || *loadIndexes {
+		fmt.Println("Loading indexes...")
+		loadSchema(db, *interleave, true)
+		fmt.Println("Done.")
 	}
 
 	initializeMix()
