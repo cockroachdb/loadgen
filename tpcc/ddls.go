@@ -8,6 +8,7 @@ import (
 var ddls = [...]struct {
 	ddl        string
 	interleave string
+	index      bool
 }{
 	{
 		ddl: `
@@ -36,8 +37,7 @@ create table district (
   d_tax        decimal(4,4),
   d_ytd        decimal(12,2),
   d_next_o_id  integer,
-  primary key (d_w_id, d_id),
-  foreign key (d_w_id) references warehouse (w_id)
+  primary key (d_w_id, d_id)
 )`,
 		interleave: `interleave in parent warehouse (d_w_id)`,
 	},
@@ -65,8 +65,7 @@ create table customer (
   c_payment_cnt  integer,
   c_delivery_cnt integer,
   c_data         varchar(500),
-  primary key (c_w_id, c_d_id, c_id),
-  foreign key (c_w_id, c_d_id) references district (d_w_id, d_id)
+  primary key (c_w_id, c_d_id, c_id)
 )`,
 		interleave: `interleave in parent district (c_w_id, c_d_id)`,
 	},
@@ -81,9 +80,7 @@ create table history (
   h_w_id   integer,
   h_date   timestamp,
   h_amount decimal(6,2),
-  h_data   varchar(24),
-  foreign key (h_c_w_id, h_c_d_id, h_c_id) references customer (c_w_id, c_d_id, c_id),
-  foreign key (h_w_id, h_d_id) references district (d_w_id, d_id)
+  h_data   varchar(24)
 )`,
 	},
 	{
@@ -97,8 +94,7 @@ create table "order" (
   o_carrier_id integer,
   o_ol_cnt     integer,
   o_all_local  integer,
-  primary key (o_w_id, o_d_id, o_id DESC),
-  foreign key (o_w_id, o_d_id, o_c_id) references customer (c_w_id, c_d_id, c_id)
+  primary key (o_w_id, o_d_id, o_id DESC)
 )`,
 
 		interleave: `interleave in parent district (o_w_id, o_d_id)`,
@@ -109,8 +105,7 @@ create table new_order (
   no_o_id  integer   not null,
   no_d_id  integer   not null,
   no_w_id  integer   not null,
-  primary key (no_w_id, no_d_id, no_o_id),
-  foreign key (no_w_id, no_d_id, no_o_id) references "order" (o_w_id, o_d_id, o_id)
+  primary key (no_w_id, no_d_id, no_o_id)
 )`,
 		// This natural-seeming interleave makes performance worse, because this
 		// table has a ton of churn and produces a lot of MVCC tombstones, which
@@ -147,9 +142,7 @@ create table stock (
   s_order_cnt  integer,
   s_remote_cnt integer,
   s_data       varchar(50),
-  primary key (s_w_id, s_i_id),
-  foreign key (s_w_id) references warehouse (w_id),
-  foreign key (s_i_id) references item (i_id)
+  primary key (s_w_id, s_i_id)
 )`,
 		interleave: `interleave in parent warehouse (s_w_id)`,
 	},
@@ -166,31 +159,90 @@ create table order_line (
   ol_quantity     integer,
   ol_amount       decimal(6,2),
   ol_dist_info    char(24),
-  primary key (ol_w_id, ol_d_id, ol_o_id DESC, ol_number),
-  foreign key (ol_w_id, ol_d_id, ol_o_id) references "order" (o_w_id, o_d_id, o_id),
-  foreign key (ol_supply_w_id, ol_i_id) references stock (s_w_id, s_i_id)
+  primary key (ol_w_id, ol_d_id, ol_o_id DESC, ol_number)
 )`,
 		interleave: `interleave in parent "order" (ol_w_id, ol_d_id, ol_o_id)`,
 	},
 	{
 		ddl:        `create index customer_idx on customer (c_w_id, c_d_id, c_last, c_first)`,
 		interleave: `interleave in parent district (c_w_id, c_d_id)`,
+		index:      true,
 	},
 	{
 		ddl:        `create unique index order_idx on "order" (o_w_id, o_d_id, o_carrier_id, o_id)`,
 		interleave: `interleave in parent district (o_w_id, o_d_id)`,
+		index:      true,
+	},
+	{
+		ddl:   `alter table district add foreign key (d_w_id) references warehouse (w_id)`,
+		index: true,
+	},
+	{
+		ddl:   `alter table customer add foreign key (c_w_id, c_d_id) references district (d_w_id, d_id)`,
+		index: true,
+	},
+	{
+		ddl:   `create index on history(h_w_id, h_d_id)`,
+		index: true,
+	},
+	{
+		ddl:   `create index on history(h_c_w_id, h_c_d_id, h_c_id)`,
+		index: true,
+	},
+	{
+		ddl:   `alter table history add foreign key (h_c_w_id, h_c_d_id, h_c_id) references customer (c_w_id, c_d_id, c_id)`,
+		index: true,
+	},
+	{
+		ddl:   `alter table history add foreign key (h_w_id, h_d_id) references district (d_w_id, d_id)`,
+		index: true,
+	},
+	{
+		ddl:   `create index on "order"(o_w_id, o_d_id, o_c_id)`,
+		index: true,
+	},
+	{
+		ddl:   `alter table "order" add foreign key (o_w_id, o_d_id, o_c_id) references customer (c_w_id, c_d_id, c_id)`,
+		index: true,
+	},
+	{
+		ddl:   `alter table stock add foreign key (s_w_id) references warehouse (w_id)`,
+		index: true,
+	},
+	{
+		ddl:   `create index on stock(s_i_id)`,
+		index: true,
+	},
+	{
+		ddl:   `alter table stock add foreign key (s_i_id) references item (i_id)`,
+		index: true,
+	},
+	{
+		ddl:   `alter table order_line add foreign key (ol_w_id, ol_d_id, ol_o_id) references "order" (o_w_id, o_d_id, o_id)`,
+		index: true,
+	},
+	{
+		ddl:   `create index order_line_fk on order_line(ol_supply_w_id, ol_d_id)`,
+		index: true,
+	},
+	{
+		ddl:   `alter table order_line add foreign key (ol_supply_w_id, ol_d_id) references stock (s_w_id, s_i_id)`,
+		index: true,
 	},
 }
 
 // loadSchema loads the entire TPCC schema into the database.
-func loadSchema(db *sql.DB, interleave bool) {
+func loadSchema(db *sql.DB, interleave bool, index bool) {
 	for _, stmt := range ddls {
 		sql := stmt.ddl
+		if index != stmt.index {
+			continue
+		}
 		if interleave {
 			sql = sql + stmt.interleave
 		}
 		if _, err := db.Exec(sql); err != nil {
-			panic(fmt.Sprintf("Couldn't exec %s: %s\n", stmt, err))
+			panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
 		}
 	}
 }
