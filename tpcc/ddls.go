@@ -97,7 +97,7 @@ create table "order" (
   o_carrier_id integer,
   o_ol_cnt     integer,
   o_all_local  integer,
-  primary key (o_w_id, o_d_id, o_id),
+  primary key (o_w_id, o_d_id, o_id DESC),
   foreign key (o_w_id, o_d_id, o_c_id) references customer (c_w_id, c_d_id, c_id)
 )`,
 
@@ -166,7 +166,7 @@ create table order_line (
   ol_quantity     integer,
   ol_amount       decimal(6,2),
   ol_dist_info    char(24),
-  primary key (ol_w_id, ol_d_id, ol_o_id, ol_number),
+  primary key (ol_w_id, ol_d_id, ol_o_id DESC, ol_number),
   foreign key (ol_w_id, ol_d_id, ol_o_id) references "order" (o_w_id, o_d_id, o_id),
   foreign key (ol_supply_w_id, ol_i_id) references stock (s_w_id, s_i_id)
 )`,

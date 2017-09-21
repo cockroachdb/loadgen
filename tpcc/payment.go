@@ -141,7 +141,7 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 				// 2.5.2.2 Case 2: Pick the middle row, rounded up, from the selection by last name.
 				rows, err := tx.Query(`
 					SELECT c_id
-					FROM customer
+					FROM customer@customer_idx
 					WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
 					ORDER BY c_first ASC`,
 					wID, d.dID, d.cLast)
