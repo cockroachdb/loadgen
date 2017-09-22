@@ -233,7 +233,11 @@ create table order_line (
 
 // loadSchema loads the entire TPCC schema into the database.
 func loadSchema(db *sql.DB, interleave bool, index bool) {
-	for _, stmt := range ddls {
+	schemaType := "tables"
+	if index {
+		schemaType = "indexes"
+	}
+	for i, stmt := range ddls {
 		sql := stmt.ddl
 		if index != stmt.index {
 			continue
@@ -244,5 +248,7 @@ func loadSchema(db *sql.DB, interleave bool, index bool) {
 		if _, err := db.Exec(sql); err != nil {
 			panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
 		}
+		fmt.Printf("Created %d %s\r", i+1, schemaType)
 	}
+	fmt.Printf("\n")
 }
