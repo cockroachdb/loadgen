@@ -122,9 +122,7 @@ func main() {
 	}
 
 	if *load || *loadIndexes {
-		fmt.Println("Loading indexes...")
 		loadSchema(db, *interleave, true)
-		fmt.Println("Done.")
 	}
 
 	initializeMix()

@@ -86,9 +86,10 @@ func parallelLoad(n int, batchSize int, entityName string, loader func(int, int)
 
 	i := 1
 	for range outCh {
-		fmt.Printf("Loaded %d/%d %ss\n", i*batchSize, n, entityName)
+		fmt.Printf("Loaded %d/%d %ss\r", i*batchSize, n, entityName)
 		i++
 	}
+	fmt.Printf("\n")
 	elapsed := time.Since(start)
 	fmt.Printf("%s\t%8d\t%12.1f ns/op\n",
 		"TPCCLoad"+strings.Title(entityName), n, float64(elapsed.Nanoseconds())/float64(n))
@@ -106,8 +107,6 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 
 	// See section 1.3 for the general layout of the tables.
 	// See section 4.3 for the rules on how to populate the database.
-
-	fmt.Println("Loading items...")
 
 	// 100,000 items.
 	parallelLoad(nItems, 1000, "item", func(id int, batchSize int) {
@@ -129,10 +128,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 		}
 	})
 
-	now := time.Now()
-	nowString := now.Format("2006-01-02 15:04:05")
 	for wID := 0; wID < *warehouses; wID++ {
-		fmt.Printf("Loading warehouse %d...\n", wID)
+		fmt.Printf("Loading warehouse %d/%d\n", wID+1, *warehouses)
+
+		warehouseStart := time.Now()
+		nowString := warehouseStart.Format("2006-01-02 15:04:05")
+
 		if _, err := stmtWarehouse.Exec(wID,
 			randInt(6, 10),  // name
 			randInt(10, 20), // street_1
@@ -182,7 +183,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 
 		// 10 districts per warehouse
 		for dID := 1; dID <= 10; dID++ {
-			fmt.Printf("Loading warehouse %d district %d...\n", wID, dID)
+			fmt.Printf("Loading district %d/10...\n", dID)
 			if _, err := stmtDistrict.Exec(dID, wID,
 				randAString(6, 10),  // name
 				randAString(10, 20), // street 1
@@ -271,7 +272,6 @@ VALUES `
 				stmtStr := `INSERT INTO "order" (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_carrier_id, o_ol_cnt, o_all_local) VALUES `
 				stmtNewOrderStr := `INSERT INTO new_order (no_o_id, no_d_id, no_w_id) VALUES `
 				haveNewOrders := false
-				fmt.Println(i)
 				for oID := i; oID < i+batchSize; oID++ {
 					olCnt := randInt(5, 15)
 					var carrierID interface{}
@@ -333,7 +333,7 @@ VALUES `
 					}
 				}
 			})
-			fmt.Printf("Loaded warehouse %d district %d\n", wID, dID)
 		}
+		fmt.Printf("Loaded warehouse in %s\n", time.Since(warehouseStart))
 	}
 }
