@@ -74,7 +74,7 @@ type tx struct {
 // Keep this in the same order as the const type enum above, since it's used as a map from tx type
 // to struct.
 var txs = [...]tx{
-	newOrderType:    {tpccTx: newOrder{}, name: "tpmC"},
+	newOrderType:    {tpccTx: newOrder{}, name: "newOrder"},
 	paymentType:     {tpccTx: payment{}, name: "payment"},
 	orderStatusType: {tpccTx: orderStatus{}, name: "orderStatus"},
 	deliveryType:    {tpccTx: delivery{}, name: "delivery"},
