@@ -62,9 +62,9 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 			if err != nil {
 				return err
 			}
-			delNewOrder, err := tx.Prepare(`
+			delNewOrder, err := tx.Prepare(makeParallel(`
 			DELETE FROM new_order
-			WHERE no_w_id = $1 AND no_d_id = $2 AND no_o_id = $3`)
+			WHERE no_w_id = $1 AND no_d_id = $2 AND no_o_id = $3`))
 			if err != nil {
 				return err
 			}
@@ -76,10 +76,10 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 			if err != nil {
 				return err
 			}
-			updateOrderLine, err := tx.Prepare(`
+			updateOrderLine, err := tx.Prepare(makeParallel(`
 			UPDATE order_line
 			SET ol_delivery_d = $1
-			WHERE ol_w_id = $2 AND ol_d_id = $3 AND ol_o_id = $4`)
+			WHERE ol_w_id = $2 AND ol_d_id = $3 AND ol_o_id = $4`))
 			if err != nil {
 				return err
 			}
@@ -89,11 +89,11 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 			if err != nil {
 				return err
 			}
-			updateCustomer, err := tx.Prepare(`
+			updateCustomer, err := tx.Prepare(makeParallel(`
 			UPDATE customer
 			SET (c_balance, c_delivery_cnt) =
 				(c_Balance + $1, c_delivery_cnt + 1)
-			WHERE c_w_id = $2 AND c_d_id = $3 AND c_id = $4`)
+			WHERE c_w_id = $2 AND c_d_id = $3 AND c_id = $4`))
 			if err != nil {
 				return err
 			}

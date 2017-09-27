@@ -43,7 +43,8 @@ var maxOps = flag.Uint64("max-ops", 0, "Maximum number of operations to run")
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just tpmC")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
-var warehouses = flag.Int("warehouses", 1, "number of warehouses for loading")
+var warehouses = flag.Int("warehouses", 1, "Number of warehouses for loading")
+var parallelStmts = flag.Bool("parallel-smts", false, "Whether parallel statement execution should be used, where possible")
 
 var mix = flag.String("mix", "tpmC=45,payment=43,orderStatus=4,delivery=4,stockLevel=4", "Weights for the transaction mix. The default matches the TPCC spec.")
 
@@ -276,4 +277,11 @@ func main() {
 			return
 		}
 	}
+}
+
+func makeParallel(s string) string {
+	if !*parallelStmts {
+		return s
+	}
+	return s + " RETURNING NOTHING"
 }

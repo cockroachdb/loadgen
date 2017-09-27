@@ -156,15 +156,15 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			}
 
 			// Insert row into the orders and new orders table.
-			if _, err := tx.Exec(`
+			if _, err := tx.Exec(makeParallel(`
 				INSERT INTO "order" (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				VALUES ($1, $2, $3, $4, $5, $6, $7)`),
 				d.oID, d.dID, d.wID, d.cID, d.oEntryD, d.oOlCnt, allLocal); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(`
+			if _, err := tx.Exec(makeParallel(`
 				INSERT INTO new_order (no_o_id, no_d_id, no_w_id) 
-				VALUES ($1, $2, $3)`,
+				VALUES ($1, $2, $3)`),
 				d.oID, d.dID, d.wID); err != nil {
 				return err
 			}
@@ -185,9 +185,9 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			if err != nil {
 				return err
 			}
-			insertOrderLine, err := tx.Prepare(`
+			insertOrderLine, err := tx.Prepare(makeParallel(`
 			INSERT INTO order_line(ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_dist_info)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`))
 			if err != nil {
 				return err
 			}

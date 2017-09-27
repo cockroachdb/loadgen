@@ -96,14 +96,14 @@ func parallelLoad(n int, batchSize int, entityName string, loader func(int, int)
 }
 
 func generateData(db *sql.DB) {
-	stmtWarehouse := prepare(db, `
+	stmtWarehouse := prepare(db, makeParallel(`
 INSERT INTO warehouse (w_id, w_name, w_street_1, w_street_2, w_city, w_state, w_zip, w_tax, w_ytd)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`)
-	stmtDistrict := prepare(db, `
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`))
+	stmtDistrict := prepare(db, makeParallel(`
 INSERT INTO district (
 	d_id, d_w_id, d_name, d_street_1, d_street_2,
 	d_city, d_state, d_zip, d_tax, d_ytd, d_next_o_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`))
 
 	// See section 1.3 for the general layout of the tables.
 	// See section 4.3 for the rules on how to populate the database.
@@ -123,7 +123,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 				randOriginalString(),
 			)
 		}
-		if _, err := db.Exec(stmtStr); err != nil {
+		if _, err := db.Exec(makeParallel(stmtStr)); err != nil {
 			panic(err)
 		}
 	})
@@ -176,7 +176,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 				)
 			}
 
-			if _, err := db.Exec(stmtStr); err != nil {
+			if _, err := db.Exec(makeParallel(stmtStr)); err != nil {
 				panic(err)
 			}
 		})
@@ -255,10 +255,10 @@ VALUES `
 						cID, dID, wID, dID, wID, nowString, 10.00, randAString(12, 24))
 
 				}
-				if _, err := db.Exec(stmtStr); err != nil {
+				if _, err := db.Exec(makeParallel(stmtStr)); err != nil {
 					panic(err)
 				}
-				if _, err := db.Exec(historyStmtStr); err != nil {
+				if _, err := db.Exec(makeParallel(historyStmtStr)); err != nil {
 					panic(err)
 				}
 			})
@@ -320,15 +320,15 @@ VALUES `
 							amount,
 							randAString(24, 24))
 					}
-					if _, err := db.Exec(orderLineStr); err != nil {
+					if _, err := db.Exec(makeParallel(orderLineStr)); err != nil {
 						panic(err)
 					}
 				}
-				if _, err := db.Exec(stmtStr); err != nil {
+				if _, err := db.Exec(makeParallel(stmtStr)); err != nil {
 					panic(err)
 				}
 				if haveNewOrders {
-					if _, err := db.Exec(stmtNewOrderStr); err != nil {
+					if _, err := db.Exec(makeParallel(stmtNewOrderStr)); err != nil {
 						panic(err)
 					}
 				}
