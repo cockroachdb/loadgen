@@ -40,12 +40,12 @@ var interleave = flag.Bool("interleave", false, "Use interleaved data")
 var load = flag.Bool("load", false, "Generate fresh TPCC data. Use with -drop")
 var loadIndexes = flag.Bool("load-indexes", false, "Load indexes. Implied by load. Don't need to use this normally.")
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of operations to run")
-var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just tpmC")
+var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just newOrders")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
 var warehouses = flag.Int("warehouses", 1, "number of warehouses for loading")
 
-var mix = flag.String("mix", "tpmC=45,payment=43,orderStatus=4,delivery=4,stockLevel=4", "Weights for the transaction mix. The default matches the TPCC spec.")
+var mix = flag.String("mix", "newOrder=45,payment=43,orderStatus=4,delivery=4,stockLevel=4", "Weights for the transaction mix. The default matches the TPCC spec.")
 
 const (
 	minLatency = 100 * time.Microsecond
@@ -264,8 +264,8 @@ func main() {
 
 			ops := atomic.LoadUint64(&txs[newOrderType].numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___newOrders___tpmC(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
-			fmt.Printf("%7.1fs %11d %11.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
+			fmt.Println("\n_elapsed___newOrders___newOrder(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+			fmt.Printf("%7.1fs %11d %15.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
 				time.Since(start).Seconds(),
 				ops, float64(ops)/elapsed,
 				time.Duration(cumLatencyByOp[newOrderType].Mean()).Seconds()*1000,
