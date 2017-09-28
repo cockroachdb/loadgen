@@ -33,6 +33,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
+var check = flag.Bool("check", false, "Run consistency checks.")
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of terminals (ignored unless -no-wait is specified)")
 var drop = flag.Bool("drop", false, "Drop the database and recreate")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
@@ -42,6 +43,7 @@ var loadIndexes = flag.Bool("load-indexes", false, "Load indexes. Implied by loa
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of operations to run")
 var noWait = flag.Bool("no-wait", false, "Run in no wait mode (no think/keying time)")
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just newOrders")
+var run = flag.Bool("run", true, "Run benchmark.")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
 var warehouses = flag.Int("warehouses", 1, "number of warehouses for loading")
@@ -124,6 +126,18 @@ func main() {
 
 	if *load || *loadIndexes {
 		loadSchema(db, *interleave, true)
+	}
+
+	if *check {
+		if err := checkConsistency(db); err != nil {
+			fmt.Printf("check consistency failed: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	if !*run {
+		os.Exit(0)
 	}
 
 	initializeMix()
