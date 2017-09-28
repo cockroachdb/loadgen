@@ -33,8 +33,10 @@ const nStock = 100000
 const nCustomers = 3000
 const originalString = "ORIGINAL"
 
+const wYtd = 300000.00
+
 // District constants
-const ytd = 30000.00 // also used by warehouse
+const ytd = 30000.00
 const nextOrderID = 3001
 
 // Customer constants
@@ -142,7 +144,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 			randState(),
 			randZip(),
 			randTax(),
-			ytd); err != nil {
+			wYtd); err != nil {
 			panic(err)
 		}
 

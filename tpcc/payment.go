@@ -195,9 +195,9 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 
 			// Insert history line.
 			if _, err := tx.Exec(`
-				INSERT INTO history (h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, h_data)
-				VALUES ($1, $2, $3, $4, $5, $6)`,
-				d.cID, d.cDID, d.cWID, d.dID, wID, hData,
+				INSERT INTO history (h_c_id, h_c_d_id, h_c_w_id, h_d_id, h_w_id, h_amount, h_date, h_data)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+				d.cID, d.cDID, d.cWID, d.dID, wID, d.hAmount, d.hDate, hData,
 			); err != nil {
 				return err
 			}
