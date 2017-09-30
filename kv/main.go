@@ -204,7 +204,7 @@ func randomBlock(r *rand.Rand) []byte {
 }
 
 type database interface {
-	read(key int64) error
+	read(count int, g generator) error
 	write(count int, g generator) error
 	clone() database
 }
@@ -244,7 +244,7 @@ func (b *blocker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limi
 		start := time.Now()
 		var err error
 		if b.gen.rand().Intn(100) < *readPercent {
-			err = b.db.read(b.gen.readKey())
+			err = b.db.read(*batch, b.gen)
 		} else {
 			err = b.db.write(*batch, b.gen)
 		}
@@ -271,9 +271,18 @@ type cockroach struct {
 	writeStmt *sql.Stmt
 }
 
-func (c *cockroach) read(k int64) error {
-	var v []byte
-	if err := c.readStmt.QueryRow(k).Scan(&k, &v); err != nil && err != sql.ErrNoRows {
+func (c *cockroach) read(count int, g generator) error {
+	args := make([]interface{}, count)
+	for i := 0; i < count; i++ {
+		args[i] = g.readKey()
+	}
+	rows, err := c.readStmt.Query(args...)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+	}
+	if err := rows.Err(); err != nil {
 		return err
 	}
 	return nil
@@ -287,9 +296,6 @@ func (c *cockroach) write(count int, g generator) error {
 		args[j+0] = g.writeKey()
 		args[j+1] = randomBlock(g.rand())
 	}
-	// TODO(peter): The key generation is not guaranteed unique. Consider using
-	// UPSERT, though initial tests show that is half the speed. Or perhaps
-	// ignoring duplicate key violation errors.
 	_, err := c.writeStmt.Exec(args...)
 	return err
 }
@@ -395,12 +401,21 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 		wg.Wait()
 	}
 
-	readStmt, err := db.Prepare(`SELECT k, v FROM test.kv WHERE k = $1`)
+	var buf bytes.Buffer
+	buf.WriteString(`SELECT k, v FROM test.kv WHERE k IN (`)
+	for i := 0; i < *batch; i++ {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		fmt.Fprintf(&buf, `$%d`, i+1)
+	}
+	buf.WriteString(`)`)
+	readStmt, err := db.Prepare(buf.String())
 	if err != nil {
 		return nil, err
 	}
 
-	var buf bytes.Buffer
+	buf.Reset()
 	buf.WriteString(`UPSERT INTO test.kv (k, v) VALUES`)
 
 	for i := 0; i < *batch; i++ {
@@ -428,13 +443,17 @@ type mongo struct {
 	kv *mgo.Collection
 }
 
-func (m *mongo) read(key int64) error {
+func (m *mongo) read(count int, g generator) error {
+	// TODO(peter): implement multi-key reads.
+	if count != 1 {
+		log.Fatalf("unsupported count: %d", count)
+	}
 	var b mongoBlock
 	// These queries are functionally the same, but the one using the $eq
 	// operator is ~30% slower!
 	//
 	// if err := m.kv.Find(bson.M{"_id": bson.M{"$eq": key}}).One(&b); err != nil {
-	if err := m.kv.Find(bson.M{"_id": key}).One(&b); err != nil {
+	if err := m.kv.Find(bson.M{"_id": g.readKey()}).One(&b); err != nil {
 		if err == mgo.ErrNotFound {
 			return nil
 		}
@@ -484,11 +503,15 @@ type cassandra struct {
 	session *gocql.Session
 }
 
-func (c *cassandra) read(key int64) error {
+func (c *cassandra) read(count int, g generator) error {
+	// TODO(peter): implement multi-key reads.
+	if count != 1 {
+		log.Fatalf("unsupported count: %d", count)
+	}
 	var v []byte
 	if err := c.session.Query(
 		`SELECT v FROM test.kv WHERE k = ? LIMIT 1`,
-		key).Consistency(gocql.One).Scan(&v); err != nil {
+		g.readKey()).Consistency(gocql.One).Scan(&v); err != nil {
 		if err == gocql.ErrNotFound {
 			return nil
 		}
