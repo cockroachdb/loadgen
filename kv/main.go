@@ -46,6 +46,7 @@ import (
 
 	"github.com/codahale/hdrhistogram"
 	"github.com/gocql/gocql"
+	"github.com/tylertreat/hdrhistogram-writer"
 	// Import postgres driver.
 	_ "github.com/lib/pq"
 )
@@ -75,6 +76,8 @@ var writeSeq = flag.Int64("write-seq", 0, "Initial write sequence value.")
 var seqSeed = flag.Int64("seed", time.Now().UnixNano(), "Key hash seed.")
 var sequential = flag.Bool("sequential", false, "Pick keys sequentially instead of randomly.")
 var drop = flag.Bool("drop", false, "Clear the existing data before starting.")
+
+var histFile = flag.String("hist-file", "", "Write histogram data to file at the end, or stdout if specified.")
 
 // Mongo flags. See https://godoc.org/gopkg.in/mgo.v2#Session.SetSafe for details.
 var mongoWMode = flag.String("mongo-wmode", "", "WMode for mongo session (eg: majority)")
@@ -778,6 +781,15 @@ func main() {
 				time.Duration(p95).Seconds()*1000,
 				time.Duration(p99).Seconds()*1000,
 				time.Duration(pMax).Seconds()*1000)
+			if *histFile == "stdout" {
+				if err := histwriter.WriteDistribution(cumLatency, nil, 1, os.Stdout); err != nil {
+					fmt.Printf("failed to write histogram to stdout: %v\n", err)
+				}
+			} else if *histFile != "" {
+				if err := histwriter.WriteDistributionFile(cumLatency, nil, 1, *histFile); err != nil {
+					fmt.Printf("failed to write histogram file: %v\n", err)
+				}
+			}
 			return
 		}
 	}
