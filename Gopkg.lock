@@ -63,6 +63,12 @@
 
 [[projects]]
   branch = "master"
+  name = "github.com/tylertreat/hdrhistogram-writer"
+  packages = ["."]
+  revision = "d105e3c15daaac745539bdd3e4a1f743b8feda09"
+
+[[projects]]
+  branch = "master"
   name = "golang.org/x/net"
   packages = ["context"]
   revision = "1c05540f6879653db88113bc4a2b70aec4bd491f"
@@ -94,6 +100,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "dcbe0da0e278229295e53e2a65c3e7b37364d65554e4aa544e3665fc0d1421f2"
+  inputs-digest = "d98a23b139a9a0bcd29838ee454c0e9313facbd56324440fdfdb16edc000e4f9"
   solver-name = "gps-cdcl"
   solver-version = 1
