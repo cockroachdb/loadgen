@@ -333,11 +333,13 @@ func (yw *ycsbWorker) chooseOp() operation {
 }
 
 type cockroach struct {
-	db *sql.DB
+	db        *sql.DB
+	readStmt  *sql.Stmt
+	writeStmt *sql.Stmt
 }
 
 func (c *cockroach) readRow(key uint64) (bool, error) {
-	res, err := c.db.Query(fmt.Sprintf("SELECT * FROM ycsb.usertable WHERE ycsb_key=%d", key))
+	res, err := c.readStmt.Query(key)
 	if err != nil {
 		return false, err
 	}
@@ -355,15 +357,12 @@ func (c *cockroach) readRow(key uint64) (bool, error) {
 }
 
 func (c *cockroach) insertRow(key uint64, fields []string) error {
-	// TODO(arjun): Consider using a prepared statement here.
-	var buf bytes.Buffer
-	buf.WriteString("INSERT INTO ycsb.usertable VALUES (")
-	fmt.Fprintf(&buf, "%d", key)
-	for _, s := range fields {
-		fmt.Fprintf(&buf, ", '%s'", s)
+	args := make([]interface{}, 1+len(fields))
+	args[0] = key
+	for i, s := range fields {
+		args[i+1] = s
 	}
-	buf.WriteString(")")
-	_, err := c.db.Exec(buf.String())
+	_, err := c.writeStmt.Exec(args...)
 	return err
 }
 
@@ -448,7 +447,24 @@ CREATE TABLE IF NOT EXISTS ycsb.usertable (
 		}
 	}
 
-	return &cockroach{db: db}, nil
+	readStmt, err := db.Prepare(`SELECT * FROM ycsb.usertable WHERE ycsb_key = $1`)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString(`INSERT INTO ycsb.usertable VALUES ($1`)
+	for i := 0; i < numTableFields; i++ {
+		fmt.Fprintf(&buf, ", $%d", i+2)
+	}
+	buf.WriteString(`)`)
+
+	writeStmt, err := db.Prepare(buf.String())
+	if err != nil {
+		return nil, err
+	}
+
+	return &cockroach{db: db, readStmt: readStmt, writeStmt: writeStmt}, nil
 }
 
 type mongoBlock struct {
