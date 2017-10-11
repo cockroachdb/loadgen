@@ -63,7 +63,7 @@ check:
 	  grep -vE '^vet: cannot process directory .git'
 	@echo "vet --shadow"
 	@! go tool vet --shadow $(PKG) 2>&1 | \
-	  grep -vE '(declaration of err shadows|^vet: cannot process directory \.git)'
+	  grep -vE '(declaration of err shadows|declaration of "err" shadows|^vet: cannot process directory \.git)'
 	@echo "golint"
 	@! ./bin/golint $(PKG) | grep -vE '(\.pb\.go|_string)'
 	@echo "gofmt (simplify)"
