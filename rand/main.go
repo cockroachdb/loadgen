@@ -34,6 +34,10 @@ var nullPct = flag.Int("null-percent", 5, "Percent random nulls.")
 var maxRate = flag.Float64("max-rate", 0, "Maximum frequency of operations (reads/writes). If 0, no limit.")
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of blocks to read/write")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
+var pgHost = flag.String("host", "localhost", "database host name")
+var pgPort = flag.Int("port", 26257, "database port number")
+var pgUser = flag.String("user", "root", "database user name (without password)")
+var pgMethod = flag.String("method", "insert", "choice of DML name (insert, upsert)")
 
 // Output in HdrHistogram Plotter format. See https://hdrhistogram.github.io/HdrHistogram/plotFiles.html
 var histFile = flag.String("hist-file", "", "Write histogram data to file for HdrHistogram Plotter, or stdout if - is specified.")
@@ -151,7 +155,7 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 
 func getInsertStmt(db *sql.DB, dbName, tableName string, cols []col) (*sql.Stmt, error) {
 	var buf bytes.Buffer
-	fmt.Fprintf(&buf, `INSERT INTO %s.%s (`, dbName, tableName)
+	fmt.Fprintf(&buf, `%s INTO %s.%s (`, *pgMethod, dbName, tableName)
 	for i, c := range cols {
 		if i > 0 {
 			buf.WriteString(",")
@@ -191,12 +195,11 @@ func main() {
 	dbName := flag.Arg(0)
 	tableName := flag.Arg(1)
 
-	dbURL := "postgres://root@localhost:26257/test?sslmode=disable"
+	dbURL := fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=disable",*pgUser,*pgHost,*pgPort,dbName)
 	parsedURL, err := url.Parse(dbURL)
 	if err != nil {
 		log.Fatal(err)
 	}
-	parsedURL.Path = "test"
 
 	// Open connection to server and create a database.
 	db, dbErr := sql.Open("postgres", parsedURL.String())
@@ -208,12 +211,13 @@ func main() {
 	db.SetMaxOpenConns(*concurrency + 1)
 	db.SetMaxIdleConns(*concurrency + 1)
 
-	rows, err := db.Query("SELECT column_name, data_type, column_default, is_nullable FROM information_schema.columns WHERE table_name = $1", tableName)
+	rows, err := db.Query("SELECT column_name, data_type, column_default, is_nullable FROM information_schema.columns WHERE table_name = $1 and table_schema=$2" , tableName, dbName)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	var cols []col
+  var numCols = 0
 
 	defer rows.Close()
 	for rows.Next() {
@@ -228,6 +232,11 @@ func main() {
 			col.dataType = "STRING"
 		}
 		cols = append(cols, col)
+    numCols += 1
+	}
+
+	if numCols == 0 {
+		log.Fatal("no columns detected")
 	}
 
 	insertStmt, err := getInsertStmt(db, dbName, tableName, cols)
