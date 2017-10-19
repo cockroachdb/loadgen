@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,8 @@ import (
 	"github.com/lib/pq"
 )
 
+const aChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 "
+
 var batch = flag.Int("batch", 1, "Number of rows to insert in a single SQL statement")
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of concurrent writers inserting blocks")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
@@ -34,6 +37,12 @@ var nullPct = flag.Int("null-percent", 5, "Percent random nulls.")
 var maxRate = flag.Float64("max-rate", 0, "Maximum frequency of operations (reads/writes). If 0, no limit.")
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of blocks to read/write")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
+var usePrepared = flag.Bool("prepared", false, "Use prepared statement")
+var pgHost = flag.String("host", "localhost", "database host name")
+var pgPort = flag.Int("port", 26257, "database port number")
+var pgUser = flag.String("user", "root", "database user name (without password)")
+var pgMethod = flag.String("method", "upsert", "choice of DML name (insert, upsert, ioc-update (insert on conflict update), ioc-nothing (insert on conflict no dothing)")
+var pgPrimary = flag.String("primary", "", "ioc-update and ioc-nothing require primary key")
 
 // Output in HdrHistogram Plotter format. See https://hdrhistogram.github.io/HdrHistogram/plotFiles.html
 var histFile = flag.String("hist-file", "", "Write histogram data to file for HdrHistogram Plotter, or stdout if - is specified.")
@@ -53,10 +62,12 @@ var usage = func() {
 }
 
 type col struct {
-	name       string
-	dataType   string
-	cdefault   sql.NullString
-	isNullable string
+	name          string
+	dataType      string
+	dataPrecision int
+	dataScale     int
+	cdefault      sql.NullString
+	isNullable    string
 }
 
 func clampLatency(d, min, max time.Duration) time.Duration {
@@ -73,17 +84,27 @@ type worker struct {
 	db         *sql.DB
 	cols       []col
 	insertStmt *sql.Stmt
+	batch      int
 	latency    struct {
 		sync.Mutex
 		*hdrhistogram.WindowedHistogram
 	}
 }
 
-func newWorker(db *sql.DB, cols []col, insertStmt *sql.Stmt) *worker {
-	b := &worker{db: db, cols: cols, insertStmt: insertStmt}
+func newWorker(db *sql.DB, cols []col, batch int, insertStmt *sql.Stmt) *worker {
+	b := &worker{db: db, cols: cols, batch: batch, insertStmt: insertStmt}
 	b.latency.WindowedHistogram = hdrhistogram.NewWindowed(1,
 		minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
 	return b
+}
+
+// randString makes a random string of length [1, 10].
+func randString(strLen int) string {
+	b := make([]byte, rand.Intn(strLen)+1)
+	for i := range b {
+		b[i] = aChars[rand.Intn(len(aChars))]
+	}
+	return string(b)
 }
 
 // run is an infinite loop in which the worker continuously attempts to
@@ -91,7 +112,7 @@ func newWorker(db *sql.DB, cols []col, insertStmt *sql.Stmt) *worker {
 func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limiter) {
 	defer wg.Done()
 
-	params := make([]interface{}, len(b.cols))
+	params := make([]interface{}, len(b.cols)*b.batch)
 	for {
 		// Limit how quickly the load generator sends requests based on --max-rate.
 		if limiter != nil {
@@ -100,35 +121,56 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 			}
 		}
 
-		for i, c := range b.cols {
-			if c.isNullable == "YES" && rand.Intn(100) < *nullPct {
-				switch c.dataType {
-				case "INT":
-					params[i] = sql.NullInt64{Valid: false}
-				case "BYTES", "STRING":
-					params[i] = sql.NullString{Valid: false}
-				case "TIMESTAMP":
-					params[i] = pq.NullTime{Valid: false}
-				default:
-					log.Fatalf("Unsupported nullable type %s", c.dataType)
-				}
-			} else {
-				switch c.dataType {
-				case "INT":
-					params[i] = rand.Int63()
-				case "BYTES", "STRING":
-					b := make([]byte, 32)
-					if _, err := rand.Read(b); err != nil {
-						log.Fatal(err)
+		k := 0 // index into params
+		for j := 0; j < b.batch; j++ {
+			for _, c := range b.cols {
+				if c.isNullable == "YES" && rand.Intn(100) < *nullPct {
+					switch c.dataType {
+					case "BOOL":
+						params[k] = sql.NullBool{Valid: false}
+					case "FLOAT":
+						params[k] = sql.NullFloat64{Valid: false}
+					case "DECIMAL", "INT":
+						params[k] = sql.NullInt64{Valid: false}
+					case "BYTES", "STRING":
+						params[k] = sql.NullString{Valid: false}
+					case "DATE", "TIMESTAMP":
+						params[k] = pq.NullTime{Valid: false}
+					default:
+						log.Fatalf("Unsupported nullable type %s", c.dataType)
 					}
-					params[i] = fmt.Sprintf("%X", b)
-				case "TIMESTAMP":
-					params[i] = time.Unix(rand.Int63n(time.Now().Unix()-94608000)+94608000, 0)
-				default:
-					log.Fatalf("Unsupported type %s", c.dataType)
+				} else {
+					switch c.dataType {
+					case "BOOL":
+						if rand.Intn(2) == 0 {
+							params[k] = false
+						} else {
+							params[k] = true
+						}
+					case "DECIMAL", "FLOAT":
+						params[k] = rand.Intn(100)
+					case "INT":
+						params[k] = rand.Int63()
+					case "BYTES":
+						b := make([]byte, 32)
+						if _, err := rand.Read(b); err != nil {
+							log.Fatal(err)
+						}
+						params[k] = fmt.Sprintf("%X", b)
+					case "STRING":
+						if c.dataPrecision == 0 {
+							params[k] = randString(32)
+						} else {
+							params[k] = randString(c.dataPrecision)
+						}
+					case "DATE", "TIMESTAMP":
+						params[k] = time.Unix(rand.Int63n(time.Now().Unix()-94608000)+94608000, 0)
+					default:
+						log.Fatalf("Unsupported type %s", c.dataType)
+					}
 				}
+				k += 1
 			}
-
 		}
 
 		start := time.Now()
@@ -151,7 +193,33 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 
 func getInsertStmt(db *sql.DB, dbName, tableName string, cols []col) (*sql.Stmt, error) {
 	var buf bytes.Buffer
-	fmt.Fprintf(&buf, `INSERT INTO %s.%s (`, dbName, tableName)
+	var dmlMethod string
+	var dmlSuffix bytes.Buffer
+
+	switch *pgMethod {
+	case "insert":
+		dmlMethod = "insert"
+		dmlSuffix.WriteString("")
+	case "upsert":
+		dmlMethod = "upsert"
+		dmlSuffix.WriteString("")
+	case "ioc-nothing":
+		dmlMethod = "insert"
+		dmlSuffix.WriteString(fmt.Sprintf(" on conflict (%s) do nothing", *pgPrimary))
+	case "ioc-update":
+		dmlMethod = "insert"
+		dmlSuffix.WriteString(fmt.Sprintf(" on conflict (%s) do update set ", *pgPrimary))
+		for i, c := range cols {
+			if i > 0 {
+				dmlSuffix.WriteString(",")
+			}
+			dmlSuffix.WriteString(fmt.Sprintf("%s=EXCLUDED.%s", c.name, c.name))
+		}
+	default:
+		log.Fatal(fmt.Sprintf("%s DML method not valid", *pgMethod))
+	}
+
+	fmt.Fprintf(&buf, `%s INTO %s.%s (`, dmlMethod, dbName, tableName)
 	for i, c := range cols {
 		if i > 0 {
 			buf.WriteString(",")
@@ -175,7 +243,12 @@ func getInsertStmt(db *sql.DB, dbName, tableName string, cols []col) (*sql.Stmt,
 		buf.WriteString(")")
 	}
 
-	fmt.Println(buf.String())
+	buf.WriteString(dmlSuffix.String())
+
+	if testing.Verbose() {
+		fmt.Println(buf.String())
+	}
+
 	return db.Prepare(buf.String())
 }
 
@@ -191,12 +264,11 @@ func main() {
 	dbName := flag.Arg(0)
 	tableName := flag.Arg(1)
 
-	dbURL := "postgres://root@localhost:26257/test?sslmode=disable"
+	dbURL := fmt.Sprintf("postgres://%s@%s:%d/%s?sslmode=disable", *pgUser, *pgHost, *pgPort, dbName)
 	parsedURL, err := url.Parse(dbURL)
 	if err != nil {
 		log.Fatal(err)
 	}
-	parsedURL.Path = "test"
 
 	// Open connection to server and create a database.
 	db, dbErr := sql.Open("postgres", parsedURL.String())
@@ -208,26 +280,78 @@ func main() {
 	db.SetMaxOpenConns(*concurrency + 1)
 	db.SetMaxIdleConns(*concurrency + 1)
 
-	rows, err := db.Query("SELECT column_name, data_type, column_default, is_nullable FROM information_schema.columns WHERE table_name = $1", tableName)
+	rows, err := db.Query("SELECT column_name, data_type, column_default, is_nullable FROM information_schema.columns WHERE table_name = $1 and table_schema=$2", tableName, dbName)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	var cols []col
+	var numCols = 0
 
 	defer rows.Close()
 	for rows.Next() {
 		var col col
+		col.dataPrecision = 0
+		col.dataScale = 0
+
 		if err := rows.Scan(&col.name, &col.dataType, &col.cdefault, &col.isNullable); err != nil {
 			log.Fatal(err)
 		}
-		if col.cdefault.String == "unique_rowid()" {
+		if col.cdefault.String == "unique_rowid()" { // skip
 			continue
 		}
-		if strings.HasPrefix(strings.ToLower(col.dataType), "string") {
-			col.dataType = "STRING"
+		if strings.HasPrefix(col.cdefault.String, "uuid_v4()") { // skip
+			continue
 		}
+
+		// ex: convert
+		// DECIMAL(15,2) to DECIMAL 15 2
+		// STRING(2) to STRING 20
+		dataTypes := strings.FieldsFunc(col.dataType, func(r rune) bool { return r == '(' || r == ',' || r == ')' })
+		if len(dataTypes) > 1 {
+			col.dataType = dataTypes[0]
+			if col.dataPrecision, err = strconv.Atoi(dataTypes[1]); err != nil {
+				log.Fatal(err)
+			}
+		}
+		if len(dataTypes) > 2 {
+			if col.dataScale, err = strconv.Atoi(dataTypes[2]); err != nil {
+				log.Fatal(err)
+			}
+		}
+
 		cols = append(cols, col)
+		numCols += 1
+	}
+
+	if numCols == 0 {
+		log.Fatal("no columns detected")
+	}
+
+	// insert on conflict requires the primary key if any from information.schema
+	if strings.HasPrefix(*pgMethod, "ioc") && *pgPrimary == "" {
+		rows, err := db.Query("SELECT column_name FROM information_schema.key_column_usage WHERE constraint_name='primary' and table_name = $1 and table_schema=$2 order by ordinal_position", tableName, dbName)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var colname string
+
+			if err := rows.Scan(&colname); err != nil {
+				log.Fatal(err)
+			}
+			if *pgPrimary != "" {
+				*pgPrimary += "," + colname
+			} else {
+				*pgPrimary += colname
+			}
+		}
+	}
+
+	if strings.HasPrefix(*pgMethod, "ioc") && *pgPrimary == "" {
+		log.Fatal("inset on conflict requires primary key to be specified via -primary if the table does not have primary key")
+		os.Exit(1)
 	}
 
 	insertStmt, err := getInsertStmt(db, dbName, tableName, cols)
@@ -251,7 +375,7 @@ func main() {
 	var wg sync.WaitGroup
 	for i := range workers {
 		wg.Add(1)
-		workers[i] = newWorker(db, cols, insertStmt)
+		workers[i] = newWorker(db, cols, *batch, insertStmt)
 		go workers[i].run(errCh, &wg, limiter)
 	}
 
