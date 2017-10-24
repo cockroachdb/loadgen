@@ -47,8 +47,9 @@ import (
 	"github.com/codahale/hdrhistogram"
 	"github.com/gocql/gocql"
 	"github.com/tylertreat/hdrhistogram-writer"
-	// Import postgres driver.
-	_ "github.com/lib/pq"
+
+	// Cockroach round-robin driver.
+	_ "github.com/cockroachdb/loadgen/internal/driver"
 )
 
 var readPercent = flag.Int("read-percent", 0, "Percent (0-100) of operations that are reads of existing keys")
@@ -316,7 +317,7 @@ func (p int64Slice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
 func setupCockroach(parsedURL *url.URL) (database, error) {
 	// Open connection to server and create a database.
-	db, dbErr := sql.Open("postgres", parsedURL.String())
+	db, dbErr := sql.Open("cockroach", parsedURL.String())
 	if dbErr != nil {
 		return nil, dbErr
 	}
@@ -605,7 +606,7 @@ func setupDatabase(dbURL string) (database, error) {
 
 var usage = func() {
 	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-	fmt.Fprintf(os.Stderr, "  %s <db URL>\n\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "  %s [<db URL> ...]\n\n", os.Args[0])
 	flag.PrintDefaults()
 }
 
@@ -614,8 +615,8 @@ func main() {
 	flag.Parse()
 
 	dbURL := "postgres://root@localhost:26257/test?sslmode=disable"
-	if flag.NArg() == 1 {
-		dbURL = flag.Arg(0)
+	if args := flag.Args(); len(args) >= 1 {
+		dbURL = strings.Join(args, " ")
 	}
 
 	if *concurrency < 1 {
