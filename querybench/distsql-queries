@@ -1,0 +1,13 @@
+# Queries we expect to run through distsql (see #14288).
+SELECT MIN(l_extendedprice) FROM tpch.lineitem
+SELECT COUNT(*) FROM tpch.lineitem
+SELECT AVG(l_extendedprice) FROM tpch.lineitem
+SELECT * FROM tpch.orders ORDER BY o_totalprice
+SELECT * FROM tpch.lineitem ORDER BY l_extendedprice LIMIT 10
+SELECT COUNT(DISTINCT l_suppkey) FROM tpch.lineitem LIMIT 1
+SELECT * FROM tpch.lineitem WHERE l_extendedprice < 1000
+# Hash join.
+SELECT * FROM tpch.lineitem JOIN tpch.supplier ON lineitem.l_suppkey = supplier.s_suppkey LIMIT 100
+# Merge join.
+SELECT COUNT(*) FROM tpch.lineitem@l_sk JOIN tpch.supplier@s_sk ON lineitem.l_suppkey = supplier.s_suppkey LIMIT 100
+SELECT l_shipmode, AVG(l_extendedprice) FROM tpch.lineitem GROUP BY l_shipmode
