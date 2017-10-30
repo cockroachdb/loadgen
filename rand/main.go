@@ -130,7 +130,7 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 						params[k] = sql.NullBool{Valid: false}
 					case "FLOAT":
 						params[k] = sql.NullFloat64{Valid: false}
-					case "DECIMAL", "INT":
+					case "DECIMAL", "INT8", "BIGINT", "INT", "INTEGER", "INT4", "SMALLINT", "INT2":
 						params[k] = sql.NullInt64{Valid: false}
 					case "BYTES", "STRING":
 						params[k] = sql.NullString{Valid: false}
@@ -149,8 +149,12 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 						}
 					case "DECIMAL", "FLOAT":
 						params[k] = rand.Intn(100)
-					case "INT":
+					case "BIGINT", "INT8":
 						params[k] = rand.Int63()
+					case "INT", "INTEGER", "INT4":
+						params[k] = rand.Int31()
+					case "SMALLINT", "INT2":
+						params[k] = int16(rand.Intn(32767))
 					case "BYTES":
 						b := make([]byte, 32)
 						if _, err := rand.Read(b); err != nil {
