@@ -152,6 +152,11 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 					case "BIGINT", "INT8":
 						params[k] = rand.Int63()
 					case "INT", "INTEGER", "INT4":
+						// using Postgres specs on integer range so that test data could be used for Postgres and CockroachDB
+						// https://www.postgresql.org/docs/current/static/datatype-numeric.html
+						// https://www.cockroachlabs.com/docs/stable/int.html
+						// Type         CRDB   Postgres
+						// INT, Integer 64bits 32bits
 						params[k] = rand.Int31()
 					case "SMALLINT", "INT2":
 						params[k] = int16(rand.Intn(32767))
