@@ -315,9 +315,9 @@ func (p int64Slice) Len() int           { return len(p) }
 func (p int64Slice) Less(i, j int) bool { return p[i] < p[j] }
 func (p int64Slice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
-func setupCockroach(parsedURL *url.URL) (database, error) {
+func setupCockroach(dbURLs []string) (database, error) {
 	// Open connection to server and create a database.
-	db, dbErr := sql.Open("cockroach", parsedURL.String())
+	db, dbErr := sql.Open("cockroach", strings.Join(dbURLs, " "))
 	if dbErr != nil {
 		return nil, dbErr
 	}
@@ -486,8 +486,10 @@ func (m *mongo) clone() database {
 	}
 }
 
-func setupMongo(parsedURL *url.URL) (database, error) {
-	session, err := mgo.Dial(parsedURL.String())
+func setupMongo(dbURLs []string) (database, error) {
+	// NB: Mongo automatically detects the other nodes in the cluster. We just
+	// have to specify the first one.
+	session, err := mgo.Dial(dbURLs[0])
 	if err != nil {
 		panic(err)
 	}
@@ -548,9 +550,20 @@ func (c *cassandra) clone() database {
 	return c
 }
 
-func setupCassandra(parsedURL *url.URL) (database, error) {
-	cluster := gocql.NewCluster(parsedURL.Host)
+func setupCassandra(dbURLs []string) (database, error) {
+	hosts := make([]string, 0, len(dbURLs))
+	for _, u := range dbURLs {
+		p, err := url.Parse(u)
+		if err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, p.Host)
+	}
+
+	cluster := gocql.NewCluster(hosts...)
 	cluster.Consistency = gocql.ParseConsistency(*cassandraConsistency)
+	cluster.Timeout = 10 * time.Second
+	cluster.ConnectTimeout = 10 * time.Second
 	s, err := cluster.CreateSession()
 	if err != nil {
 		log.Fatal(err)
@@ -585,8 +598,8 @@ CREATE TABLE IF NOT EXISTS test.kv(
 // setupDatabase performs initial setup for the example, creating a database and
 // with a single table. If the desired table already exists on the cluster, the
 // existing table will be dropped.
-func setupDatabase(dbURL string) (database, error) {
-	parsedURL, err := url.Parse(dbURL)
+func setupDatabase(dbURLs []string) (database, error) {
+	parsedURL, err := url.Parse(dbURLs[0])
 	if err != nil {
 		return nil, err
 	}
@@ -594,11 +607,11 @@ func setupDatabase(dbURL string) (database, error) {
 
 	switch parsedURL.Scheme {
 	case "postgres", "postgresql":
-		return setupCockroach(parsedURL)
+		return setupCockroach(dbURLs)
 	case "mongodb":
-		return setupMongo(parsedURL)
+		return setupMongo(dbURLs)
 	case "cassandra":
-		return setupCassandra(parsedURL)
+		return setupCassandra(dbURLs)
 	default:
 		return nil, fmt.Errorf("unsupported database: %s", parsedURL.Scheme)
 	}
@@ -614,9 +627,9 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
-	dbURL := "postgres://root@localhost:26257/test?sslmode=disable"
+	dbURLs := []string{"postgres://root@localhost:26257/test?sslmode=disable"}
 	if args := flag.Args(); len(args) >= 1 {
-		dbURL = strings.Join(args, " ")
+		dbURLs = args
 	}
 
 	if *concurrency < 1 {
@@ -635,7 +648,7 @@ func main() {
 	{
 		var err error
 		for err == nil || *tolerateErrors {
-			db, err = setupDatabase(dbURL)
+			db, err = setupDatabase(dbURLs)
 			if err == nil {
 				break
 			}
