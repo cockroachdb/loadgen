@@ -67,6 +67,8 @@ var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error"
 
 var maxRate = flag.Float64("max-rate", 0, "Maximum frequency of operations (reads/writes). If 0, no limit.")
 
+var tableName = flag.String("table", "kv", "Name of table to use")
+
 // Minimum and maximum size of inserted blocks.
 var minBlockSizeBytes = flag.Int("min-block-bytes", 1, "Minimum amount of raw data written with each insertion")
 var maxBlockSizeBytes = flag.Int("max-block-bytes", 2, "Maximum amount of raw data written with each insertion")
@@ -330,13 +332,13 @@ func setupCockroach(dbURLs []string) (database, error) {
 	db.SetMaxIdleConns(*concurrency + 1)
 
 	if *drop {
-		if _, err := db.Exec(`DROP TABLE IF EXISTS test.kv`); err != nil {
+		if _, err := db.Exec(`DROP TABLE IF EXISTS test.` + *tableName); err != nil {
 			return nil, err
 		}
 	}
 
 	if _, err := db.Exec(`
-	CREATE TABLE IF NOT EXISTS test.kv (
+	CREATE TABLE IF NOT EXISTS test.` + *tableName + ` (
 	  k BIGINT NOT NULL PRIMARY KEY,
 	  v BYTES NOT NULL
 	)`); err != nil {
@@ -372,12 +374,12 @@ func setupCockroach(dbURLs []string) (database, error) {
 					}
 					m := (p.lo + p.hi) / 2
 					split := splitPoints[m]
-					if _, err := db.Exec(`ALTER TABLE test.kv SPLIT AT VALUES ($1)`, split); err != nil {
+					if _, err := db.Exec(`ALTER TABLE test.`+*tableName+` SPLIT AT VALUES ($1)`, split); err != nil {
 						log.Fatal(err)
 					}
 					// NB: the split+1 expression below guarantees our scatter range
 					// touches both sides of the split.
-					if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE test.kv SCATTER FROM (%d) TO (%d)`,
+					if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE test.`+*tableName+` SCATTER FROM (%d) TO (%d)`,
 						splitPoints[p.lo], split+1)); err != nil {
 						// SCATTER can collide with normal replicate queue operations and
 						// fail spuriously, so only print the error.
@@ -407,7 +409,7 @@ func setupCockroach(dbURLs []string) (database, error) {
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString(`SELECT k, v FROM test.kv WHERE k IN (`)
+	buf.WriteString(`SELECT k, v FROM test.` + *tableName + ` WHERE k IN (`)
 	for i := 0; i < *batch; i++ {
 		if i > 0 {
 			buf.WriteString(", ")
@@ -421,7 +423,7 @@ func setupCockroach(dbURLs []string) (database, error) {
 	}
 
 	buf.Reset()
-	buf.WriteString(`UPSERT INTO test.kv (k, v) VALUES`)
+	buf.WriteString(`UPSERT INTO test.` + *tableName + ` (k, v) VALUES`)
 
 	for i := 0; i < *batch; i++ {
 		j := i * 2
@@ -497,7 +499,7 @@ func setupMongo(dbURLs []string) (database, error) {
 	session.SetMode(mgo.Monotonic, true)
 	session.SetSafe(&mgo.Safe{WMode: *mongoWMode, J: *mongoJ})
 
-	kv := session.DB("test").C("kv")
+	kv := session.DB("test").C(*tableName)
 	if *drop {
 		// Intentionally ignore the error as we can't tell if the collection
 		// doesn't exist.
@@ -517,7 +519,7 @@ func (c *cassandra) read(count int, g generator) error {
 	}
 	var v []byte
 	if err := c.session.Query(
-		`SELECT v FROM test.kv WHERE k = ? LIMIT 1`,
+		`SELECT v FROM test.`+*tableName+` WHERE k = ? LIMIT 1`,
 		g.readKey()).Consistency(gocql.One).Scan(&v); err != nil {
 		if err == gocql.ErrNotFound {
 			return nil
@@ -528,7 +530,7 @@ func (c *cassandra) read(count int, g generator) error {
 }
 
 func (c *cassandra) write(count int, g generator) error {
-	const insertBlockStmt = "INSERT INTO test.kv (k, v) VALUES (?, ?); "
+	insertBlockStmt := `INSERT INTO test.` + *tableName + ` (k, v) VALUES (?, ?); `
 
 	var buf bytes.Buffer
 	buf.WriteString("BEGIN BATCH ")
@@ -579,8 +581,8 @@ CREATE KEYSPACE IF NOT EXISTS test WITH REPLICATION = {
   'replication_factor' : %d
 };`, *cassandraReplication)
 
-	const createTable = `
-CREATE TABLE IF NOT EXISTS test.kv(
+	createTable := `
+CREATE TABLE IF NOT EXISTS test.` + *tableName + `(
   k BIGINT,
   v BLOB,
   PRIMARY KEY(k)
