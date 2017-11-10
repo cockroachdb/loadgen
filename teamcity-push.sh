@@ -5,12 +5,23 @@ set -euxo pipefail
 VERSION=$(git describe 2>/dev/null || git rev-parse --short HEAD)
 
 echo "Deploying ${VERSION}..."
-aws configure set region us-east-1
 
 BUCKET_NAME=cockroach
 LATEST_SUFFIX=.LATEST
 REPO_NAME=loadgen
 SHA=$(git rev-parse HEAD)
+
+
+function aws {
+  docker run --rm \
+    -t \
+    -e AWS_ACCESS_KEY_ID \
+    -e AWS_SECRET_ACCESS_KEY \
+    -e AWS_DEFAULT_REGION \
+    -v "$(pwd):/project" \
+    mesosphere/aws-cli \
+    $@
+}
 
 # push_one_binary takes the path to the binary inside the repo.
 # eg: push_one_binary sql/sql.test
@@ -25,10 +36,11 @@ function push_one_binary {
   time aws s3 cp "${rel_path}" s3://${BUCKET_NAME}/${REPO_NAME}/"${binary_name}"."${SHA}"
 
   # Upload LATEST file.
-  tmpfile=$(mktemp /tmp/cockroach-push.XXXXXX)
-  echo "${SHA}" > "${tmpfile}"
-  time aws s3 cp --website-redirect /${REPO_NAME}/"${binary_name}"."${SHA}" "${tmpfile}" s3://${BUCKET_NAME}/${REPO_NAME}/"${binary_name}"${LATEST_SUFFIX}
-  rm -f "${tmpfile}"
+  latest_file="${binary_name}${LATEST_SUFFIX}"
+  echo "${SHA}" > "${latest_file}"
+
+  time aws s3 cp --website-redirect /${REPO_NAME}/"${binary_name}"."${SHA}" "${latest_file}" s3://${BUCKET_NAME}/${REPO_NAME}/"${binary_name}"${LATEST_SUFFIX}
+  rm -f "${latest_file}"
 }
 
 for proj in kv ycsb tpch tpcc ; do
