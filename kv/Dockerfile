@@ -6,7 +6,5 @@
 # to clients anyways.
 from scratch
 
-MAINTAINER Alex Robinson <alex@cockroachlabs.com>
-
 ADD kv /kv
 ENTRYPOINT ["/kv"]
