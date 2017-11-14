@@ -489,8 +489,8 @@ func (m *mongo) clone() database {
 }
 
 func setupMongo(dbURLs []string) (database, error) {
-	// NB: Mongo automatically detects the other nodes in the cluster. We just
-	// have to specify the first one.
+	// NB: the Mongo driver automatically detects the other nodes in the
+	// cluster. We just have to specify the first one.
 	session, err := mgo.Dial(dbURLs[0])
 	if err != nil {
 		panic(err)
