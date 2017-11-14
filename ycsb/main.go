@@ -34,6 +34,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -44,8 +46,10 @@ import (
 	"gopkg.in/mgo.v2/bson"
 
 	"github.com/gocql/gocql"
-	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
+
+	// Cockroach round-robin driver.
+	_ "github.com/cockroachdb/loadgen/internal/driver"
 )
 
 // SQL statements
@@ -370,9 +374,9 @@ func (c *cockroach) clone() database {
 	return c
 }
 
-func setupCockroach(parsedURL *url.URL) (database, error) {
+func setupCockroach(dbURLs []string) (database, error) {
 	// Open connection to server and create a database.
-	db, err := sql.Open("postgres", parsedURL.String())
+	db, err := sql.Open("cockroach", strings.Join(dbURLs, " "))
 	if err != nil {
 		return nil, err
 	}
@@ -435,16 +439,65 @@ CREATE TABLE IF NOT EXISTS ycsb.usertable (
 		// NB: We only need ycsbWorker.hashKey, so passing nil for the database and
 		// ZipfGenerator is ok.
 		w := newYcsbWorker(nil, nil, *workload)
+		splitPoints := make([]uint64, *splits)
 		for i := 0; i < *splits; i++ {
-			key := w.hashKey(uint64(i))
-			if _, err := db.Exec(`ALTER TABLE ycsb.usertable SPLIT AT VALUES ($1)`, key); err != nil {
-				log.Fatal(err)
-			}
+			splitPoints[i] = w.hashKey(uint64(i))
+		}
+		sort.Slice(splitPoints, func(i, j int) bool {
+			return splitPoints[i] < splitPoints[j]
+		})
+
+		type pair struct {
+			lo, hi int
+		}
+		splitCh := make(chan pair, *concurrency)
+		splitCh <- pair{0, len(splitPoints)}
+		doneCh := make(chan struct{})
+
+		var wg sync.WaitGroup
+		for i := 0; i < *concurrency; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					p, ok := <-splitCh
+					if !ok {
+						break
+					}
+					m := (p.lo + p.hi) / 2
+					split := splitPoints[m]
+					if _, err := db.Exec(`ALTER TABLE ycsb.usertable SPLIT AT VALUES ($1)`, split); err != nil {
+						log.Fatal(err)
+					}
+					// NB: the split+1 expression below guarantees our scatter range
+					// touches both sides of the split.
+					if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE ycsb.usertable SCATTER FROM (%d) TO (%d)`,
+						splitPoints[p.lo], split+1)); err != nil {
+						// SCATTER can collide with normal replicate queue operations and
+						// fail spuriously, so only print the error.
+						log.Print(err)
+					}
+					doneCh <- struct{}{}
+					go func() {
+						if p.lo < m {
+							splitCh <- pair{p.lo, m}
+						}
+						if m+1 < p.hi {
+							splitCh <- pair{m + 1, p.hi}
+						}
+					}()
+				}
+			}()
 		}
 
-		if _, err := db.Exec(`ALTER TABLE ycsb.usertable SCATTER`); err != nil {
-			return nil, err
+		for i := 0; i < len(splitPoints); i++ {
+			<-doneCh
+			if (i+1)%1000 == 0 {
+				fmt.Printf("%d splits\n", i+1)
+			}
 		}
+		close(splitCh)
+		wg.Wait()
 	}
 
 	readStmt, err := db.Prepare(`SELECT * FROM ycsb.usertable WHERE ycsb_key = $1`)
@@ -501,8 +554,10 @@ func (m *mongo) clone() database {
 	}
 }
 
-func setupMongo(parsedURL *url.URL) (database, error) {
-	session, err := mgo.Dial(parsedURL.String())
+func setupMongo(dbURLs []string) (database, error) {
+	// NB: the Mongo driver automatically detects the other nodes in the
+	// cluster. We just have to specify the first one.
+	session, err := mgo.Dial(dbURLs[0])
 	if err != nil {
 		panic(err)
 	}
@@ -554,8 +609,17 @@ func (c *cassandra) clone() database {
 	return c
 }
 
-func setupCassandra(parsedURL *url.URL) (database, error) {
-	cluster := gocql.NewCluster(parsedURL.Host)
+func setupCassandra(dbURLs []string) (database, error) {
+	hosts := make([]string, 0, len(dbURLs))
+	for _, u := range dbURLs {
+		p, err := url.Parse(u)
+		if err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, p.Host)
+	}
+
+	cluster := gocql.NewCluster(hosts...)
 	cluster.Consistency = gocql.ParseConsistency(*cassandraConsistency)
 	s, err := cluster.CreateSession()
 	if err != nil {
@@ -600,8 +664,8 @@ CREATE TABLE IF NOT EXISTS ycsb.usertable (
 // setupDatabase performs initial setup for the example, creating a database
 // with a single table. If the desired table already exists on the cluster, the
 // existing table will be dropped if the -drop flag was specified.
-func setupDatabase(dbURL string) (database, error) {
-	parsedURL, err := url.Parse(dbURL)
+func setupDatabase(dbURLs []string) (database, error) {
+	parsedURL, err := url.Parse(dbURLs[0])
 	if err != nil {
 		return nil, err
 	}
@@ -609,11 +673,11 @@ func setupDatabase(dbURL string) (database, error) {
 
 	switch parsedURL.Scheme {
 	case "postgres", "postgresql":
-		return setupCockroach(parsedURL)
+		return setupCockroach(dbURLs)
 	case "mongodb":
-		return setupMongo(parsedURL)
+		return setupMongo(dbURLs)
 	case "cassandra":
-		return setupCassandra(parsedURL)
+		return setupCassandra(dbURLs)
 	default:
 		return nil, fmt.Errorf("unsupported database: %s", parsedURL.Scheme)
 	}
@@ -651,9 +715,9 @@ func main() {
 		fmt.Fprintf(os.Stdout, "Starting YCSB load generator\n")
 	}
 
-	dbURL := "postgresql://root@localhost:26257/ycsb?sslmode=disable"
-	if flag.NArg() == 1 {
-		dbURL = flag.Arg(0)
+	dbURLs := []string{"postgres://root@localhost:26257/ycsb?sslmode=disable"}
+	if args := flag.Args(); len(args) >= 1 {
+		dbURLs = args
 	}
 
 	if *concurrency < 1 {
@@ -661,7 +725,7 @@ func main() {
 			concurrency)
 	}
 
-	db, err := setupDatabase(dbURL)
+	db, err := setupDatabase(dbURLs)
 
 	if err != nil {
 		log.Fatalf("Setting up database failed: %s", err)

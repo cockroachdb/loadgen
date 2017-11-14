@@ -47,8 +47,9 @@ import (
 	"github.com/codahale/hdrhistogram"
 	"github.com/gocql/gocql"
 	"github.com/tylertreat/hdrhistogram-writer"
-	// Import postgres driver.
-	_ "github.com/lib/pq"
+
+	// Cockroach round-robin driver.
+	_ "github.com/cockroachdb/loadgen/internal/driver"
 )
 
 var readPercent = flag.Int("read-percent", 0, "Percent (0-100) of operations that are reads of existing keys")
@@ -65,6 +66,8 @@ var splits = flag.Int("splits", 0, "Number of splits to perform before starting 
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 
 var maxRate = flag.Float64("max-rate", 0, "Maximum frequency of operations (reads/writes). If 0, no limit.")
+
+var tableName = flag.String("table", "kv", "Name of table to use")
 
 // Minimum and maximum size of inserted blocks.
 var minBlockSizeBytes = flag.Int("min-block-bytes", 1, "Minimum amount of raw data written with each insertion")
@@ -314,9 +317,9 @@ func (p int64Slice) Len() int           { return len(p) }
 func (p int64Slice) Less(i, j int) bool { return p[i] < p[j] }
 func (p int64Slice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
-func setupCockroach(parsedURL *url.URL) (database, error) {
+func setupCockroach(dbURLs []string) (database, error) {
 	// Open connection to server and create a database.
-	db, dbErr := sql.Open("postgres", parsedURL.String())
+	db, dbErr := sql.Open("cockroach", strings.Join(dbURLs, " "))
 	if dbErr != nil {
 		return nil, dbErr
 	}
@@ -329,13 +332,13 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	db.SetMaxIdleConns(*concurrency + 1)
 
 	if *drop {
-		if _, err := db.Exec(`DROP TABLE IF EXISTS test.kv`); err != nil {
+		if _, err := db.Exec(`DROP TABLE IF EXISTS test.` + *tableName); err != nil {
 			return nil, err
 		}
 	}
 
 	if _, err := db.Exec(`
-	CREATE TABLE IF NOT EXISTS test.kv (
+	CREATE TABLE IF NOT EXISTS test.` + *tableName + ` (
 	  k BIGINT NOT NULL PRIMARY KEY,
 	  v BYTES NOT NULL
 	)`); err != nil {
@@ -371,12 +374,12 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 					}
 					m := (p.lo + p.hi) / 2
 					split := splitPoints[m]
-					if _, err := db.Exec(`ALTER TABLE test.kv SPLIT AT VALUES ($1)`, split); err != nil {
+					if _, err := db.Exec(`ALTER TABLE test.`+*tableName+` SPLIT AT VALUES ($1)`, split); err != nil {
 						log.Fatal(err)
 					}
 					// NB: the split+1 expression below guarantees our scatter range
 					// touches both sides of the split.
-					if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE test.kv SCATTER FROM (%d) TO (%d)`,
+					if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE test.`+*tableName+` SCATTER FROM (%d) TO (%d)`,
 						splitPoints[p.lo], split+1)); err != nil {
 						// SCATTER can collide with normal replicate queue operations and
 						// fail spuriously, so only print the error.
@@ -406,7 +409,7 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString(`SELECT k, v FROM test.kv WHERE k IN (`)
+	buf.WriteString(`SELECT k, v FROM test.` + *tableName + ` WHERE k IN (`)
 	for i := 0; i < *batch; i++ {
 		if i > 0 {
 			buf.WriteString(", ")
@@ -420,7 +423,7 @@ func setupCockroach(parsedURL *url.URL) (database, error) {
 	}
 
 	buf.Reset()
-	buf.WriteString(`UPSERT INTO test.kv (k, v) VALUES`)
+	buf.WriteString(`UPSERT INTO test.` + *tableName + ` (k, v) VALUES`)
 
 	for i := 0; i < *batch; i++ {
 		j := i * 2
@@ -485,8 +488,10 @@ func (m *mongo) clone() database {
 	}
 }
 
-func setupMongo(parsedURL *url.URL) (database, error) {
-	session, err := mgo.Dial(parsedURL.String())
+func setupMongo(dbURLs []string) (database, error) {
+	// NB: the Mongo driver automatically detects the other nodes in the
+	// cluster. We just have to specify the first one.
+	session, err := mgo.Dial(dbURLs[0])
 	if err != nil {
 		panic(err)
 	}
@@ -494,7 +499,7 @@ func setupMongo(parsedURL *url.URL) (database, error) {
 	session.SetMode(mgo.Monotonic, true)
 	session.SetSafe(&mgo.Safe{WMode: *mongoWMode, J: *mongoJ})
 
-	kv := session.DB("test").C("kv")
+	kv := session.DB("test").C(*tableName)
 	if *drop {
 		// Intentionally ignore the error as we can't tell if the collection
 		// doesn't exist.
@@ -514,7 +519,7 @@ func (c *cassandra) read(count int, g generator) error {
 	}
 	var v []byte
 	if err := c.session.Query(
-		`SELECT v FROM test.kv WHERE k = ? LIMIT 1`,
+		`SELECT v FROM test.`+*tableName+` WHERE k = ? LIMIT 1`,
 		g.readKey()).Consistency(gocql.One).Scan(&v); err != nil {
 		if err == gocql.ErrNotFound {
 			return nil
@@ -525,7 +530,7 @@ func (c *cassandra) read(count int, g generator) error {
 }
 
 func (c *cassandra) write(count int, g generator) error {
-	const insertBlockStmt = "INSERT INTO test.kv (k, v) VALUES (?, ?); "
+	insertBlockStmt := `INSERT INTO test.` + *tableName + ` (k, v) VALUES (?, ?); `
 
 	var buf bytes.Buffer
 	buf.WriteString("BEGIN BATCH ")
@@ -547,9 +552,20 @@ func (c *cassandra) clone() database {
 	return c
 }
 
-func setupCassandra(parsedURL *url.URL) (database, error) {
-	cluster := gocql.NewCluster(parsedURL.Host)
+func setupCassandra(dbURLs []string) (database, error) {
+	hosts := make([]string, 0, len(dbURLs))
+	for _, u := range dbURLs {
+		p, err := url.Parse(u)
+		if err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, p.Host)
+	}
+
+	cluster := gocql.NewCluster(hosts...)
 	cluster.Consistency = gocql.ParseConsistency(*cassandraConsistency)
+	cluster.Timeout = 10 * time.Second
+	cluster.ConnectTimeout = 10 * time.Second
 	s, err := cluster.CreateSession()
 	if err != nil {
 		log.Fatal(err)
@@ -565,8 +581,8 @@ CREATE KEYSPACE IF NOT EXISTS test WITH REPLICATION = {
   'replication_factor' : %d
 };`, *cassandraReplication)
 
-	const createTable = `
-CREATE TABLE IF NOT EXISTS test.kv(
+	createTable := `
+CREATE TABLE IF NOT EXISTS test.` + *tableName + `(
   k BIGINT,
   v BLOB,
   PRIMARY KEY(k)
@@ -584,8 +600,8 @@ CREATE TABLE IF NOT EXISTS test.kv(
 // setupDatabase performs initial setup for the example, creating a database and
 // with a single table. If the desired table already exists on the cluster, the
 // existing table will be dropped.
-func setupDatabase(dbURL string) (database, error) {
-	parsedURL, err := url.Parse(dbURL)
+func setupDatabase(dbURLs []string) (database, error) {
+	parsedURL, err := url.Parse(dbURLs[0])
 	if err != nil {
 		return nil, err
 	}
@@ -593,11 +609,11 @@ func setupDatabase(dbURL string) (database, error) {
 
 	switch parsedURL.Scheme {
 	case "postgres", "postgresql":
-		return setupCockroach(parsedURL)
+		return setupCockroach(dbURLs)
 	case "mongodb":
-		return setupMongo(parsedURL)
+		return setupMongo(dbURLs)
 	case "cassandra":
-		return setupCassandra(parsedURL)
+		return setupCassandra(dbURLs)
 	default:
 		return nil, fmt.Errorf("unsupported database: %s", parsedURL.Scheme)
 	}
@@ -605,7 +621,7 @@ func setupDatabase(dbURL string) (database, error) {
 
 var usage = func() {
 	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-	fmt.Fprintf(os.Stderr, "  %s <db URL>\n\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "  %s [<db URL> ...]\n\n", os.Args[0])
 	flag.PrintDefaults()
 }
 
@@ -613,9 +629,9 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
-	dbURL := "postgres://root@localhost:26257/test?sslmode=disable"
-	if flag.NArg() == 1 {
-		dbURL = flag.Arg(0)
+	dbURLs := []string{"postgres://root@localhost:26257/test?sslmode=disable"}
+	if args := flag.Args(); len(args) >= 1 {
+		dbURLs = args
 	}
 
 	if *concurrency < 1 {
@@ -634,7 +650,7 @@ func main() {
 	{
 		var err error
 		for err == nil || *tolerateErrors {
-			db, err = setupDatabase(dbURL)
+			db, err = setupDatabase(dbURLs)
 			if err == nil {
 				break
 			}
