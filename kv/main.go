@@ -520,7 +520,7 @@ func (c *cassandra) read(count int, g generator) error {
 	var v []byte
 	if err := c.session.Query(
 		`SELECT v FROM test.`+*tableName+` WHERE k = ? LIMIT 1`,
-		g.readKey()).Consistency(gocql.One).Scan(&v); err != nil {
+		g.readKey()).Scan(&v); err != nil {
 		if err == gocql.ErrNotFound {
 			return nil
 		}

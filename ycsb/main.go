@@ -583,7 +583,7 @@ func (c *cassandra) readRow(key uint64) (bool, error) {
 	var fields [10]string
 	if err := c.session.Query(
 		`SELECT * FROM ycsb.usertable WHERE ycsb_key = ? LIMIT 1`,
-		key).Consistency(gocql.One).Scan(&k, &fields[0], &fields[1], &fields[2], &fields[3],
+		key).Scan(&k, &fields[0], &fields[1], &fields[2], &fields[3],
 		&fields[4], &fields[5], &fields[6], &fields[7], &fields[8], &fields[9]); err != nil {
 		if err == gocql.ErrNotFound {
 			return true, nil
