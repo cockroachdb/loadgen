@@ -770,6 +770,9 @@ func main() {
 		// Reset the start time and stats.
 		start.set(time.Now())
 		atomic.StoreUint64(&startOpsCount, 0)
+		for i := 0; i < int(statsLength); i++ {
+			atomic.StoreUint64(&globalStats[i], 0)
+		}
 
 		wg = sync.WaitGroup{}
 		for i := range workers {
