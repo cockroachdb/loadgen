@@ -73,10 +73,37 @@ scalefactor-1 is roughly 1gb in size of CSVs (translating into about
 ~1.7gb in CockroachDB counting denormalizations), and scales linearly
 for larger scalefactors.
 
-
 ## Rand
 
 Rand generates random data and inserts it into CockroachDB. It
 introspects a given database table for its schema and generates data
 to fit that schema, so you must first manually create a database and
 table inside CockroachDB with the schema you want.
+
+## Interleave
+
+Interleave is a benchmark that compares the performance of
+[interleaving](https://www.cockroachlabs.com/docs/stable/interleave-in-parent.html)
+and not interleaving a set of tables.
+The schema models an e-commerce service with the following table hierarchy
+```
+merchant
+   |______> product
+              |______> variant
+   |______> store
+
+```
+where each arrow denotes a "has one or none" or "has many" relationship. The
+number of rows generated can passed via the command line flags `--merchants`,
+`--products`, `--variants`, and `--stores`, respectively.
+
+To generate a fresh set of data, invoke with the `--load` flag (and `--drop` if
+you would like to also drop an existing set of data).
+
+By default, the tables are constructed without
+[interleaving](https://www.cockroachlabs.com/docs/stable/interleave-in-parent.html).
+To initialize the data, one must specify the `--interleaved` flag. To re-run
+the benchmark on each "type of tables", ensure that you connect to the
+corresponding database.
+
+A custom query can also be passed in via `--query`.
