@@ -33,13 +33,14 @@ import (
 	_ "github.com/lib/pq"
 )
 
-var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of concurrent writers inserting blocks")
+var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of terminals (ignored unless -no-wait is specified)")
 var drop = flag.Bool("drop", false, "Drop the database and recreate")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
 var interleave = flag.Bool("interleave", false, "Use interleaved data")
 var load = flag.Bool("load", false, "Generate fresh TPCC data. Use with -drop")
 var loadIndexes = flag.Bool("load-indexes", false, "Load indexes. Implied by load. Don't need to use this normally.")
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of operations to run")
+var noWait = flag.Bool("no-wait", false, "Run in no wait mode (no think/keying time)")
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just newOrders")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
@@ -130,10 +131,23 @@ func main() {
 	start := time.Now()
 	errCh := make(chan error)
 	var wg sync.WaitGroup
-	workers := make([]*worker, *concurrency)
-	for i := range workers {
-		workers[i] = newWorker(db, &wg)
-		go workers[i].run(errCh, &wg)
+	var workers []*worker
+	if *noWait {
+		workers = make([]*worker, *concurrency)
+		for i := range workers {
+			workers[i] = newWorker(i, db, &wg)
+			go workers[i].run(errCh, -1)
+		}
+	} else {
+		// 10 workers per warehouse.
+		workers = make([]*worker, *warehouses*10)
+		for i := 0; i < *warehouses; i++ {
+			for j := 0; j < 10; j++ {
+				idx := i*10 + j
+				workers[idx] = newWorker(idx, db, &wg)
+				go workers[idx].run(errCh, i)
+			}
+		}
 	}
 
 	var numErr int
@@ -264,10 +278,10 @@ func main() {
 
 			ops := atomic.LoadUint64(&txs[newOrderType].numOps)
 			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___newOrders___newOrder(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
-			fmt.Printf("%7.1fs %11d %15.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
+			fmt.Println("\n_elapsed___newOrders___tpmC(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+			fmt.Printf("%7.1fs %11d %11.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
 				time.Since(start).Seconds(),
-				ops, float64(ops)/elapsed,
+				ops, float64(ops)/elapsed*60,
 				time.Duration(cumLatencyByOp[newOrderType].Mean()).Seconds()*1000,
 				time.Duration(cumLatencyByOp[newOrderType].ValueAtQuantile(50)).Seconds()*1000,
 				time.Duration(cumLatencyByOp[newOrderType].ValueAtQuantile(95)).Seconds()*1000,

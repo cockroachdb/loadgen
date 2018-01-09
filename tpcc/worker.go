@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -31,8 +32,10 @@ import (
 )
 
 type worker struct {
-	db      *sql.DB
-	latency struct {
+	idx       int
+	db        *sql.DB
+	warehouse int
+	latency   struct {
 		sync.Mutex
 		*hdrhistogram.WindowedHistogram
 		byOp []*hdrhistogram.WindowedHistogram
@@ -66,19 +69,41 @@ type tpccTx interface {
 
 type tx struct {
 	tpccTx
-	weight int    // percent likelihood that each transaction type is run
-	name   string // display name
-	numOps uint64
+	weight     int    // percent likelihood that each transaction type is run
+	name       string // display name
+	numOps     uint64
+	keyingTime int     // keying time in seconds, see 5.2.5.7
+	thinkTime  float64 // minimum mean of think time distribution, 5.2.5.7
 }
 
 // Keep this in the same order as the const type enum above, since it's used as a map from tx type
 // to struct.
 var txs = [...]tx{
-	newOrderType:    {tpccTx: newOrder{}, name: "newOrder"},
-	paymentType:     {tpccTx: payment{}, name: "payment"},
-	orderStatusType: {tpccTx: orderStatus{}, name: "orderStatus"},
-	deliveryType:    {tpccTx: delivery{}, name: "delivery"},
-	stockLevelType:  {tpccTx: stockLevel{}, name: "stockLevel"},
+	newOrderType: {
+		tpccTx: newOrder{}, name: "newOrder",
+		keyingTime: 18,
+		thinkTime:  12,
+	},
+	paymentType: {
+		tpccTx: payment{}, name: "payment",
+		keyingTime: 3,
+		thinkTime:  12,
+	},
+	orderStatusType: {
+		tpccTx: orderStatus{}, name: "orderStatus",
+		keyingTime: 2,
+		thinkTime:  10,
+	},
+	deliveryType: {
+		tpccTx: delivery{}, name: "delivery",
+		keyingTime: 2,
+		thinkTime:  5,
+	},
+	stockLevelType: {
+		tpccTx: stockLevel{}, name: "stockLevel",
+		keyingTime: 2,
+		thinkTime:  5,
+	},
 }
 
 var totalWeight int
@@ -121,9 +146,9 @@ func initializeMix() {
 	}
 }
 
-func newWorker(db *sql.DB, wg *sync.WaitGroup) *worker {
+func newWorker(i int, db *sql.DB, wg *sync.WaitGroup) *worker {
 	wg.Add(1)
-	w := &worker{db: db}
+	w := &worker{idx: i, db: db}
 	w.latency.WindowedHistogram = hdrhistogram.NewWindowed(1,
 		minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
 
@@ -135,9 +160,8 @@ func newWorker(db *sql.DB, wg *sync.WaitGroup) *worker {
 	return w
 }
 
-func (w *worker) run(errCh chan<- error, wg *sync.WaitGroup) {
+func (w *worker) run(errCh chan<- error, warehouseID int) {
 	for {
-		start := time.Now()
 		transactionType := rand.Intn(totalWeight)
 		weightSum := 0
 		var i int
@@ -148,7 +172,14 @@ func (w *worker) run(errCh chan<- error, wg *sync.WaitGroup) {
 				break
 			}
 		}
-		if _, err := t.run(w.db, rand.Intn(*warehouses)); err != nil {
+		if *noWait {
+			warehouseID = rand.Intn(*warehouses)
+		} else {
+			time.Sleep(time.Duration(t.keyingTime) * time.Second)
+		}
+
+		start := time.Now()
+		if _, err := t.run(w.db, warehouseID); err != nil {
 			errCh <- errors.Wrapf(err, "error in %s", t.name)
 			continue
 		}
@@ -165,6 +196,18 @@ func (w *worker) run(errCh chan<- error, wg *sync.WaitGroup) {
 		v := atomic.AddUint64(&numOps, 1)
 		if *maxOps > 0 && v >= *maxOps {
 			return
+		}
+
+		if !*noWait {
+			// 5.2.5.4: Think time is taken independently from a negative exponential
+			// distribution. Think time = -log(r) * u, where r is a uniform random number
+			// between 0 and 1 and u is the mean think time per operation.
+			// Each distribution is truncated at 10 times its mean value.
+			thinkTime := -math.Log(rand.Float64()) * float64(t.thinkTime)
+			if thinkTime > (t.thinkTime * 10) {
+				thinkTime = t.thinkTime * 10
+			}
+			time.Sleep(time.Duration(thinkTime) * time.Second)
 		}
 	}
 }
