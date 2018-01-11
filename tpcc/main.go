@@ -45,8 +45,12 @@ var noWait = flag.Bool("no-wait", false, "Run in no wait mode (no think/keying t
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just newOrders")
 var run = flag.Bool("run", true, "Run benchmark.")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
+var serializable = flag.Bool("serializable", false, "Force serializable mode")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
 var warehouses = flag.Int("warehouses", 1, "number of warehouses for loading")
+
+var usePostgres bool
+var txOpts *sql.TxOptions
 
 var mix = flag.String("mix", "newOrder=45,payment=43,orderStatus=4,delivery=4,stockLevel=4", "Weights for the transaction mix. The default matches the TPCC spec.")
 
@@ -64,13 +68,9 @@ var usage = func() {
 // numOps keeps a global count of successful operations.
 var numOps uint64
 
-func setupDatabase(dbURL string) (*sql.DB, error) {
+func setupDatabase(parsedURL *url.URL) (*sql.DB, error) {
 	if *verbose {
-		fmt.Printf("connecting to db: %s\n", dbURL)
-	}
-	parsedURL, err := url.Parse(dbURL)
-	if err != nil {
-		return nil, err
+		fmt.Printf("connecting to db: %s\n", parsedURL)
 	}
 
 	// Open connection to server and create a database.
@@ -103,29 +103,55 @@ func main() {
 		dbURL = flag.Arg(0)
 	}
 
-	db, err := setupDatabase(dbURL)
+	parsedURL, err := url.Parse(dbURL)
+	if err != nil {
+		fmt.Println("Failed to parse url:", err)
+		os.Exit(1)
+	}
+	usePostgres = parsedURL.Port() == "5432"
+	db, err := setupDatabase(parsedURL)
+
+	if *serializable {
+		txOpts = &sql.TxOptions{Isolation: sql.LevelSerializable}
+	}
 
 	if err != nil {
 		fmt.Printf("Setting up database connection failed: %s, continuing assuming database already exists.", err)
 	}
 
 	if *drop {
-		if _, err := db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", dbName)); err != nil {
-			fmt.Println("couldn't drop database:", err)
+		if usePostgres {
+			if _, err := db.Exec("DROP SCHEMA public CASCADE"); err != nil {
+				fmt.Println("couldn't drop database:", err)
+				os.Exit(1)
+			}
+		} else {
+			if _, err := db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", dbName)); err != nil {
+				fmt.Println("couldn't drop database:", err)
+				os.Exit(1)
+			}
 		}
 	}
 
 	if *load {
-		if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS " + dbName); err != nil {
-			fmt.Println("couldn't create database:", err)
-			os.Exit(1)
+		if usePostgres {
+			if _, err := db.Exec("CREATE SCHEMA IF NOT EXISTS public"); err != nil {
+				fmt.Println("couldn't drop database:", err)
+				os.Exit(1)
+			}
+		} else {
+			if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS " + dbName); err != nil {
+				fmt.Println("couldn't create database: ", err)
+				os.Exit(1)
+			}
 		}
-		loadSchema(db, *interleave, false)
+
+		loadSchema(db, *interleave, false, usePostgres)
 		generateData(db)
 	}
 
 	if *load || *loadIndexes {
-		loadSchema(db, *interleave, true)
+		loadSchema(db, *interleave, true, usePostgres)
 	}
 
 	if *check {

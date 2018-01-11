@@ -6,9 +6,10 @@ import (
 )
 
 var ddls = [...]struct {
-	ddl        string
-	interleave string
-	index      bool
+	ddl             string
+	interleave      string
+	index           bool
+	interpolateDesc bool
 }{
 	{
 		ddl: `
@@ -94,10 +95,11 @@ create table "order" (
   o_carrier_id integer,
   o_ol_cnt     integer,
   o_all_local  integer,
-  primary key (o_w_id, o_d_id, o_id DESC)
+  primary key (o_w_id, o_d_id, o_id %s)
 )`,
 
-		interleave: `interleave in parent district (o_w_id, o_d_id)`,
+		interleave:      `interleave in parent district (o_w_id, o_d_id)`,
+		interpolateDesc: true,
 	},
 	{
 		ddl: `
@@ -159,9 +161,10 @@ create table order_line (
   ol_quantity     integer,
   ol_amount       decimal(6,2),
   ol_dist_info    char(24),
-  primary key (ol_w_id, ol_d_id, ol_o_id DESC, ol_number)
+  primary key (ol_w_id, ol_d_id, ol_o_id %s, ol_number)
 )`,
-		interleave: `interleave in parent "order" (ol_w_id, ol_d_id, ol_o_id)`,
+		interleave:      `interleave in parent "order" (ol_w_id, ol_d_id, ol_o_id)`,
+		interpolateDesc: true,
 	},
 	{
 		ddl:        `create index customer_idx on customer (c_w_id, c_d_id, c_last, c_first)`,
@@ -232,7 +235,7 @@ create table order_line (
 }
 
 // loadSchema loads the entire TPCC schema into the database.
-func loadSchema(db *sql.DB, interleave bool, index bool) {
+func loadSchema(db *sql.DB, interleave bool, index bool, usePostgres bool) {
 	schemaType := "tables"
 	if index {
 		schemaType = "indexes"
@@ -244,6 +247,14 @@ func loadSchema(db *sql.DB, interleave bool, index bool) {
 		}
 		if interleave {
 			sql = sql + stmt.interleave
+		}
+		if stmt.interpolateDesc {
+			descStr := "DESC"
+			if usePostgres {
+				// Postgres doesn't allow DESC in primary indexes.
+				descStr = ""
+			}
+			sql = fmt.Sprintf(sql, descStr)
 		}
 		if _, err := db.Exec(sql); err != nil {
 			panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
