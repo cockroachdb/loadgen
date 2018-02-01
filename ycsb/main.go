@@ -20,7 +20,6 @@
 package main
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/binary"
 	"flag"
@@ -81,6 +80,8 @@ var initialLoad = flag.Uint64("initial-load", 10000,
 	"Initial number of rows to sequentially insert before beginning Zipfian workload generation")
 var strictPostgres = flag.Bool("strict-postgres", false,
 	"Use Postgres compatible syntax, without any Cockroach specific extensions")
+var json = flag.Bool("json", false,
+	"Use JSONB rather than relational data")
 
 // 7 days at 5% writes and 30k ops/s
 var maxWrites = flag.Uint64("max-writes", 7*24*3600*1500,
@@ -342,6 +343,51 @@ type cockroach struct {
 	writeStmt *sql.Stmt
 }
 
+const (
+	createStatement = 0
+	readStatement   = 1
+	writeStatement  = 2
+)
+
+var relationalStrategy = [3]string{
+	`CREATE TABLE IF NOT EXISTS ycsb.usertable (
+		ycsb_key BIGINT PRIMARY KEY NOT NULL,
+		FIELD1 TEXT,
+		FIELD2 TEXT,
+		FIELD3 TEXT,
+		FIELD4 TEXT,
+		FIELD5 TEXT,
+		FIELD6 TEXT,
+		FIELD7 TEXT,
+		FIELD8 TEXT,
+		FIELD9 TEXT,
+		FIELD10 TEXT
+	)`,
+	`SELECT * FROM ycsb.usertable WHERE ycsb_key = $1`,
+	`INSERT INTO ycsb.usertable VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+}
+
+var jsonbStrategy = [3]string{
+	`CREATE TABLE IF NOT EXISTS ycsb.usertable (
+		ycsb_key BIGINT PRIMARY KEY NOT NULL,
+		FIELD JSONB
+	)`,
+	`SELECT * FROM ycsb.usertable WHERE ycsb_key = $1`,
+	`INSERT INTO ycsb.usertable VALUES ($1,
+		json_build_object(
+			'field1',  $2:::text,
+			'field2',  $3:::text,
+			'field3',  $4:::text,
+			'field4',  $5:::text,
+			'field5',  $6:::text,
+			'field6',  $7:::text,
+			'field7',  $8:::text,
+			'field8',  $9:::text,
+			'field9',  $10:::text,
+			'field10', $11:::text
+		))`,
+}
+
 func (c *cockroach) readRow(key uint64) (bool, error) {
 	res, err := c.readStmt.Query(key)
 	if err != nil {
@@ -416,22 +462,22 @@ func setupCockroach(dbURLs []string) (database, error) {
 		}
 	}
 
-	// Create the initial table for storing blocks.
-	createStmt := `
-CREATE TABLE IF NOT EXISTS ycsb.usertable (
-	ycsb_key BIGINT PRIMARY KEY NOT NULL,
-	FIELD1 TEXT,
-	FIELD2 TEXT,
-	FIELD3 TEXT,
-	FIELD4 TEXT,
-	FIELD5 TEXT,
-	FIELD6 TEXT,
-	FIELD7 TEXT,
-	FIELD8 TEXT,
-	FIELD9 TEXT,
-	FIELD10 TEXT
-)`
-	if _, err := db.Exec(createStmt); err != nil {
+	schema := relationalStrategy
+	if *json {
+		schema = jsonbStrategy
+	}
+
+	if _, err := db.Exec(schema[createStatement]); err != nil {
+		return nil, err
+	}
+
+	readStmt, err := db.Prepare(schema[readStatement])
+	if err != nil {
+		return nil, err
+	}
+
+	writeStmt, err := db.Prepare(schema[writeStatement])
+	if err != nil {
 		return nil, err
 	}
 
@@ -498,23 +544,6 @@ CREATE TABLE IF NOT EXISTS ycsb.usertable (
 		}
 		close(splitCh)
 		wg.Wait()
-	}
-
-	readStmt, err := db.Prepare(`SELECT * FROM ycsb.usertable WHERE ycsb_key = $1`)
-	if err != nil {
-		return nil, err
-	}
-
-	var buf bytes.Buffer
-	buf.WriteString(`INSERT INTO ycsb.usertable VALUES ($1`)
-	for i := 0; i < numTableFields; i++ {
-		fmt.Fprintf(&buf, ", $%d", i+2)
-	}
-	buf.WriteString(`)`)
-
-	writeStmt, err := db.Prepare(buf.String())
-	if err != nil {
-		return nil, err
 	}
 
 	return &cockroach{db: db, readStmt: readStmt, writeStmt: writeStmt}, nil
