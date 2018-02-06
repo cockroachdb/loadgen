@@ -6,7 +6,7 @@ CockroachDB (and on occasion, other databases).
 # Building
 
 `make build` will build all load generators. The binaries can be found
-in the individual directories (`kv/kv`, `tpcc/tpcc`,`'tpch/tpch`,
+in the individual directories (`kv/kv`, `tpcc/tpcc`,`tpch/tpch`,
 `ycsb/ycsb`, and `rand/rand`).
 
 # Running
