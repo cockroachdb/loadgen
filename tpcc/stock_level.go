@@ -79,10 +79,10 @@ func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
 				FROM order_line
 				JOIN stock
 				ON s_i_id=ol_i_id
+				  AND s_w_id=ol_w_id
 				WHERE ol_w_id = $1
 				  AND ol_d_id = $2
 				  AND ol_o_id BETWEEN $3 - 20 AND $3 - 1
-				  AND s_w_id = $1
 				  AND s_quantity < $4`,
 				wID, d.dID, dNextOID, d.threshold,
 			).Scan(&d.lowStock); err != nil {
