@@ -20,6 +20,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/binary"
 	"flag"
@@ -41,6 +42,7 @@ import (
 	"time"
 	"unsafe"
 
+	"golang.org/x/time/rate"
 	mgo "gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 
@@ -74,7 +76,7 @@ var writeDuration = flag.Duration("write-duration", 0,
 var verbose = flag.Bool("v", false, "Print *verbose debug output")
 var drop = flag.Bool("drop", true,
 	"Drop the existing table and recreate it to start from scratch")
-var rateLimit = flag.Uint64("rate-limit", 0,
+var maxRate = flag.Uint64("rate-limit", 0,
 	"Maximum number of operations per second per worker. Set to zero for no rate limit")
 var initialLoad = flag.Uint64("initial-load", 10000,
 	"Initial number of rows to sequentially insert before beginning Zipfian workload generation")
@@ -111,13 +113,13 @@ type ycsbWorker struct {
 	// An RNG used to generate random keys
 	zipfR *ZipfGenerator
 	// An RNG used to generate random strings for the values
-	r             *rand.Rand
-	readFreq      float32
-	writeFreq     float32
-	scanFreq      float32
-	minNanosPerOp time.Duration
-	hashFunc      hash.Hash64
-	hashBuf       [8]byte
+	r         *rand.Rand
+	readFreq  float32
+	writeFreq float32
+	scanFreq  float32
+	limiter   *rate.Limiter
+	hashFunc  hash.Hash64
+	hashBuf   [8]byte
 }
 
 type statistic int
@@ -147,11 +149,13 @@ func newYcsbWorker(db database, zipfR *ZipfGenerator, workloadFlag string) *ycsb
 	source := rand.NewSource(int64(time.Now().UnixNano()))
 	var readFreq, writeFreq, scanFreq float32
 
-	// TODO(arjun): This could be implemented as a token bucket.
-	var minNanosPerOp time.Duration
-	if *rateLimit != 0 {
-		minNanosPerOp = time.Duration(1000000000 / *rateLimit)
+	var limiter *rate.Limiter
+	if *maxRate > 0 {
+		// Create a limiter using maxRate specified on the command line and
+		// with allowed burst of 1 at the maximum allowed rate.
+		limiter = rate.NewLimiter(rate.Limit(*maxRate), 1)
 	}
+
 	switch workloadFlag {
 	case "A", "a":
 		readFreq = 0.5
@@ -176,14 +180,14 @@ func newYcsbWorker(db database, zipfR *ZipfGenerator, workloadFlag string) *ycsb
 	}
 	r := rand.New(source)
 	return &ycsbWorker{
-		db:            db,
-		r:             r,
-		zipfR:         zipfR,
-		readFreq:      readFreq,
-		writeFreq:     writeFreq,
-		scanFreq:      scanFreq,
-		minNanosPerOp: minNanosPerOp,
-		hashFunc:      fnv.New64(),
+		db:        db,
+		r:         r,
+		zipfR:     zipfR,
+		readFreq:  readFreq,
+		writeFreq: writeFreq,
+		scanFreq:  scanFreq,
+		limiter:   limiter,
+		hashFunc:  fnv.New64(),
 	}
 }
 
@@ -244,7 +248,12 @@ func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
-		tStart := time.Now()
+		if yw.limiter != nil {
+			if err := yw.limiter.Wait(context.Background()); err != nil {
+				panic(err)
+			}
+		}
+
 		switch yw.chooseOp() {
 		case readOp:
 			if err := yw.readRow(); err != nil {
@@ -265,12 +274,6 @@ func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
 				atomic.AddUint64(&globalStats[scanErrors], 1)
 				errCh <- err
 			}
-		}
-
-		// If we are done faster than the rate limit, wait.
-		tElapsed := time.Since(tStart)
-		if tElapsed < yw.minNanosPerOp {
-			time.Sleep(time.Duration(yw.minNanosPerOp - tElapsed))
 		}
 	}
 }
