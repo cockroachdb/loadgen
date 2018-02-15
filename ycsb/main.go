@@ -20,6 +20,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/binary"
 	"flag"
@@ -41,6 +42,7 @@ import (
 	"time"
 	"unsafe"
 
+	"golang.org/x/time/rate"
 	mgo "gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 
@@ -74,8 +76,8 @@ var writeDuration = flag.Duration("write-duration", 0,
 var verbose = flag.Bool("v", false, "Print *verbose debug output")
 var drop = flag.Bool("drop", true,
 	"Drop the existing table and recreate it to start from scratch")
-var rateLimit = flag.Uint64("rate-limit", 0,
-	"Maximum number of operations per second per worker. Set to zero for no rate limit")
+var maxRate = flag.Uint64("max-rate", 0,
+	"Maximum requency of operations (reads/writes). If 0, no limit.")
 var initialLoad = flag.Uint64("initial-load", 10000,
 	"Initial number of rows to sequentially insert before beginning Zipfian workload generation")
 var strictPostgres = flag.Bool("strict-postgres", false,
@@ -111,13 +113,12 @@ type ycsbWorker struct {
 	// An RNG used to generate random keys
 	zipfR *ZipfGenerator
 	// An RNG used to generate random strings for the values
-	r             *rand.Rand
-	readFreq      float32
-	writeFreq     float32
-	scanFreq      float32
-	minNanosPerOp time.Duration
-	hashFunc      hash.Hash64
-	hashBuf       [8]byte
+	r         *rand.Rand
+	readFreq  float32
+	writeFreq float32
+	scanFreq  float32
+	hashFunc  hash.Hash64
+	hashBuf   [8]byte
 }
 
 type statistic int
@@ -147,11 +148,6 @@ func newYcsbWorker(db database, zipfR *ZipfGenerator, workloadFlag string) *ycsb
 	source := rand.NewSource(int64(time.Now().UnixNano()))
 	var readFreq, writeFreq, scanFreq float32
 
-	// TODO(arjun): This could be implemented as a token bucket.
-	var minNanosPerOp time.Duration
-	if *rateLimit != 0 {
-		minNanosPerOp = time.Duration(1000000000 / *rateLimit)
-	}
 	switch workloadFlag {
 	case "A", "a":
 		readFreq = 0.5
@@ -176,14 +172,13 @@ func newYcsbWorker(db database, zipfR *ZipfGenerator, workloadFlag string) *ycsb
 	}
 	r := rand.New(source)
 	return &ycsbWorker{
-		db:            db,
-		r:             r,
-		zipfR:         zipfR,
-		readFreq:      readFreq,
-		writeFreq:     writeFreq,
-		scanFreq:      scanFreq,
-		minNanosPerOp: minNanosPerOp,
-		hashFunc:      fnv.New64(),
+		db:        db,
+		r:         r,
+		zipfR:     zipfR,
+		readFreq:  readFreq,
+		writeFreq: writeFreq,
+		scanFreq:  scanFreq,
+		hashFunc:  fnv.New64(),
 	}
 }
 
@@ -240,11 +235,16 @@ func (yw *ycsbWorker) runLoader(n uint64, numWorkers int, thisWorkerNum int, wg 
 
 // runWorker is an infinite loop in which the ycsbWorker reads and writes
 // random data into the table in proportion to the op frequencies.
-func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
+func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limiter) {
 	defer wg.Done()
 
 	for {
-		tStart := time.Now()
+		if limiter != nil {
+			if err := limiter.Wait(context.Background()); err != nil {
+				panic(err)
+			}
+		}
+
 		switch yw.chooseOp() {
 		case readOp:
 			if err := yw.readRow(); err != nil {
@@ -265,12 +265,6 @@ func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
 				atomic.AddUint64(&globalStats[scanErrors], 1)
 				errCh <- err
 			}
-		}
-
-		// If we are done faster than the rate limit, wait.
-		tElapsed := time.Since(tStart)
-		if tElapsed < yw.minNanosPerOp {
-			time.Sleep(time.Duration(yw.minNanosPerOp - tElapsed))
 		}
 	}
 }
@@ -777,6 +771,13 @@ func main() {
 		workers[i] = newYcsbWorker(db.clone(), zipfR, *workload)
 	}
 
+	var limiter *rate.Limiter
+	if *maxRate > 0 {
+		// Create a limiter using maxRate specified on the command line and
+		// with allowed burst of 1 at the maximum allowed rate.
+		limiter = rate.NewLimiter(rate.Limit(*maxRate), 1)
+	}
+
 	errCh := make(chan error)
 	tick := time.Tick(1 * time.Second)
 	done := make(chan os.Signal, 3)
@@ -797,16 +798,21 @@ func main() {
 		fmt.Printf("Loading complete: %.1fs\n", time.Since(loadStart).Seconds())
 
 		// Reset the start time and stats.
-		start.set(time.Now())
+		lastNow = time.Now()
+		start.set(lastNow)
 		atomic.StoreUint64(&startOpsCount, 0)
 		for i := 0; i < int(statsLength); i++ {
 			atomic.StoreUint64(&globalStats[i], 0)
+		}
+		lastOpsCount = 0
+		for i := range lastStats {
+			lastStats[i] = 0
 		}
 
 		wg = sync.WaitGroup{}
 		for i := range workers {
 			wg.Add(1)
-			go workers[i].runWorker(errCh, &wg)
+			go workers[i].runWorker(errCh, &wg, limiter)
 		}
 
 		go func() {
