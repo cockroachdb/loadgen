@@ -800,10 +800,15 @@ func main() {
 		fmt.Printf("Loading complete: %.1fs\n", time.Since(loadStart).Seconds())
 
 		// Reset the start time and stats.
-		start.set(time.Now())
+		lastNow = time.Now()
+		start.set(lastNow)
 		atomic.StoreUint64(&startOpsCount, 0)
 		for i := 0; i < int(statsLength); i++ {
 			atomic.StoreUint64(&globalStats[i], 0)
+		}
+		lastOpsCount = 0
+		for i := range lastStats {
+			lastStats[i] = 0
 		}
 
 		wg = sync.WaitGroup{}
