@@ -76,8 +76,8 @@ var writeDuration = flag.Duration("write-duration", 0,
 var verbose = flag.Bool("v", false, "Print *verbose debug output")
 var drop = flag.Bool("drop", true,
 	"Drop the existing table and recreate it to start from scratch")
-var maxRate = flag.Uint64("rate-limit", 0,
-	"Maximum number of operations per second per worker. Set to zero for no rate limit")
+var maxRate = flag.Uint64("max-rate", 0,
+	"Maximum requency of operations (reads/writes). If 0, no limit.")
 var initialLoad = flag.Uint64("initial-load", 10000,
 	"Initial number of rows to sequentially insert before beginning Zipfian workload generation")
 var strictPostgres = flag.Bool("strict-postgres", false,
@@ -117,7 +117,6 @@ type ycsbWorker struct {
 	readFreq  float32
 	writeFreq float32
 	scanFreq  float32
-	limiter   *rate.Limiter
 	hashFunc  hash.Hash64
 	hashBuf   [8]byte
 }
@@ -149,13 +148,6 @@ func newYcsbWorker(db database, zipfR *ZipfGenerator, workloadFlag string) *ycsb
 	source := rand.NewSource(int64(time.Now().UnixNano()))
 	var readFreq, writeFreq, scanFreq float32
 
-	var limiter *rate.Limiter
-	if *maxRate > 0 {
-		// Create a limiter using maxRate specified on the command line and
-		// with allowed burst of 1 at the maximum allowed rate.
-		limiter = rate.NewLimiter(rate.Limit(*maxRate), 1)
-	}
-
 	switch workloadFlag {
 	case "A", "a":
 		readFreq = 0.5
@@ -186,7 +178,6 @@ func newYcsbWorker(db database, zipfR *ZipfGenerator, workloadFlag string) *ycsb
 		readFreq:  readFreq,
 		writeFreq: writeFreq,
 		scanFreq:  scanFreq,
-		limiter:   limiter,
 		hashFunc:  fnv.New64(),
 	}
 }
@@ -244,12 +235,12 @@ func (yw *ycsbWorker) runLoader(n uint64, numWorkers int, thisWorkerNum int, wg 
 
 // runWorker is an infinite loop in which the ycsbWorker reads and writes
 // random data into the table in proportion to the op frequencies.
-func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup) {
+func (yw *ycsbWorker) runWorker(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limiter) {
 	defer wg.Done()
 
 	for {
-		if yw.limiter != nil {
-			if err := yw.limiter.Wait(context.Background()); err != nil {
+		if limiter != nil {
+			if err := limiter.Wait(context.Background()); err != nil {
 				panic(err)
 			}
 		}
@@ -780,6 +771,13 @@ func main() {
 		workers[i] = newYcsbWorker(db.clone(), zipfR, *workload)
 	}
 
+	var limiter *rate.Limiter
+	if *maxRate > 0 {
+		// Create a limiter using maxRate specified on the command line and
+		// with allowed burst of 1 at the maximum allowed rate.
+		limiter = rate.NewLimiter(rate.Limit(*maxRate), 1)
+	}
+
 	errCh := make(chan error)
 	tick := time.Tick(1 * time.Second)
 	done := make(chan os.Signal, 3)
@@ -814,7 +812,7 @@ func main() {
 		wg = sync.WaitGroup{}
 		for i := range workers {
 			wg.Add(1)
-			go workers[i].runWorker(errCh, &wg)
+			go workers[i].runWorker(errCh, &wg, limiter)
 		}
 
 		go func() {
