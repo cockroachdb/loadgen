@@ -62,9 +62,9 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 			if err != nil {
 				return err
 			}
-			delNewOrder, err := tx.Prepare(`
-			DELETE FROM new_order
-			WHERE no_w_id = $1 AND no_d_id = $2 AND no_o_id = $3`)
+			sumOrderLine, err := tx.Prepare(`
+			SELECT SUM(ol_amount) FROM order_line
+			WHERE ol_w_id = $1 AND ol_d_id = $2 AND ol_o_id = $3`)
 			if err != nil {
 				return err
 			}
@@ -76,16 +76,18 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 			if err != nil {
 				return err
 			}
-			updateOrderLine, err := tx.Prepare(`
-			UPDATE order_line
-			SET ol_delivery_d = $1
-			WHERE ol_w_id = $2 AND ol_d_id = $3 AND ol_o_id = $4`)
+			delNewOrder, err := tx.Prepare(`
+			DELETE FROM new_order
+			WHERE no_w_id = $1 AND no_d_id = $2 AND no_o_id = $3
+			RETURNING NOTHING`)
 			if err != nil {
 				return err
 			}
-			sumOrderLine, err := tx.Prepare(`
-			SELECT SUM(ol_amount) FROM order_line
-			WHERE ol_w_id = $1 AND ol_d_id = $2 AND ol_o_id = $3`)
+			updateOrderLine, err := tx.Prepare(`
+			UPDATE order_line
+			SET ol_delivery_d = $1
+			WHERE ol_w_id = $2 AND ol_d_id = $3 AND ol_o_id = $4
+			RETURNING NOTHING`)
 			if err != nil {
 				return err
 			}
@@ -93,36 +95,44 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 			UPDATE customer
 			SET (c_balance, c_delivery_cnt) =
 				(c_Balance + $1, c_delivery_cnt + 1)
-			WHERE c_w_id = $2 AND c_d_id = $3 AND c_id = $4`)
+			WHERE c_w_id = $2 AND c_d_id = $3 AND c_id = $4
+			RETURNING NOTHING`)
 			if err != nil {
 				return err
 			}
 
 			// 2.7.4.2. For each district:
-			for dID := 1; dID <= 10; dID++ {
-				var oID int
-				if err := getNewOrder.QueryRow(wID, dID).Scan(&oID); err != nil {
+			const ids = 10
+			var oIDs [ids]int
+			var olTotals [ids]float64
+			var oCIDs [ids]int
+			for dID := 1; dID <= ids; dID++ {
+				if err := getNewOrder.QueryRow(wID, dID).Scan(&oIDs[dID-1]); err != nil {
 					// If no matching order is found, the delivery of this order is skipped.
 					if err != sql.ErrNoRows {
 						return err
 					}
 					continue
 				}
-				if _, err := delNewOrder.Exec(wID, dID, oID); err != nil {
+				oID := &oIDs[dID-1]
+				if err := sumOrderLine.QueryRow(wID, dID, oID).Scan(&olTotals[dID-1]); err != nil {
 					return err
 				}
-				var oCID int
-				if err := updateOrder.QueryRow(oCarrierID, wID, dID, oID).Scan(&oCID); err != nil {
+				if err := updateOrder.QueryRow(oCarrierID, wID, dID, oID).Scan(&oCIDs[dID-1]); err != nil {
+					return err
+				}
+			}
+			for dID := 1; dID <= ids; dID++ {
+				oID := oIDs[dID-1]
+				olTotal := olTotals[dID-1]
+				oCID := oCIDs[dID-1]
+				if _, err := delNewOrder.Exec(wID, dID, oID); err != nil {
 					return err
 				}
 				if _, err := updateOrderLine.Exec(olDeliveryD, wID, dID, oID); err != nil {
 					return err
 				}
-				var olTotal float64
-				if err := sumOrderLine.QueryRow(wID, dID, oID).Scan(&olTotal); err != nil {
-					return err
-				}
-				if _, err := updateCustomer.Exec(olTotal, wID, dID, oID); err != nil {
+				if _, err := updateCustomer.Exec(olTotal, wID, dID, oCID); err != nil {
 					return err
 				}
 			}
