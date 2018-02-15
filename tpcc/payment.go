@@ -110,7 +110,7 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 	if err := crdb.ExecuteTx(
 		context.Background(),
 		db,
-		&sql.TxOptions{Isolation: sql.LevelSerializable},
+		txOpts,
 		func(tx *sql.Tx) error {
 			var wName, dName string
 			// Update warehouse with payment
@@ -139,11 +139,15 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 			// then proceed.
 			if d.cID == 0 {
 				// 2.5.2.2 Case 2: Pick the middle row, rounded up, from the selection by last name.
-				rows, err := tx.Query(`
+				indexStr := "@customer_idx"
+				if usePostgres {
+					indexStr = ""
+				}
+				rows, err := tx.Query(fmt.Sprintf(`
 					SELECT c_id
-					FROM customer@customer_idx
+					FROM customer%s
 					WHERE c_w_id = $1 AND c_d_id = $2 AND c_last = $3
-					ORDER BY c_first ASC`,
+					ORDER BY c_first ASC`, indexStr),
 					wID, d.dID, d.cLast)
 				if err != nil {
 					return errors.Wrap(err, "select by last name fail")

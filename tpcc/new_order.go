@@ -121,7 +121,7 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 	err := crdb.ExecuteTx(
 		context.Background(),
 		db,
-		&sql.TxOptions{Isolation: sql.LevelSerializable},
+		txOpts,
 		func(tx *sql.Tx) error {
 			// Select the warehouse tax rate.
 			if err := tx.QueryRow(
