@@ -161,7 +161,7 @@ func newWorker(i int, db *sql.DB, wg *sync.WaitGroup) *worker {
 }
 
 func (w *worker) run(errCh chan<- error, warehouseID int) {
-	for {
+	for firstRun := true; ; {
 		transactionType := rand.Intn(totalWeight)
 		weightSum := 0
 		var i int
@@ -175,7 +175,14 @@ func (w *worker) run(errCh chan<- error, warehouseID int) {
 		if *noWait {
 			warehouseID = rand.Intn(*warehouses)
 		} else {
-			time.Sleep(time.Duration(t.keyingTime) * time.Second)
+			sleepTime := float64(t.keyingTime * 1000)
+			if firstRun {
+				// Sleep for a random duration up to the keying time to smooth out any
+				// potential thundering herd effects when the load generator starts.
+				sleepTime = sleepTime * rand.Float64()
+				firstRun = false
+			}
+			time.Sleep(time.Duration(sleepTime) * time.Millisecond)
 		}
 
 		start := time.Now()
