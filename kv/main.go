@@ -289,10 +289,7 @@ func (c *cockroach) read(count int, g generator) error {
 	}
 	for rows.Next() {
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	return nil
+	return rows.Err()
 }
 
 func (c *cockroach) write(count int, g generator) error {

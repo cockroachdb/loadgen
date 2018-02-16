@@ -2,6 +2,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package vcs exposes functions for resolving import paths
+// and using version control systems, which can be used to
+// implement behavior similar to the standard "go get" command.
+//
+// This package is a copy of internal code in package cmd/go/internal/get,
+// modified to make the identifiers exported. It's provided here
+// for developers who want to write tools with similar semantics.
+// It needs to be manually kept in sync with upstream when changes are
+// made to cmd/go/internal/get; see https://golang.org/issues/11490.
+//
 package vcs // import "golang.org/x/tools/go/vcs"
 
 import (
@@ -344,11 +354,28 @@ func FromDir(dir, srcRoot string) (vcs *Cmd, root string, err error) {
 		return nil, "", fmt.Errorf("directory %q is outside source root %q", dir, srcRoot)
 	}
 
+	var vcsRet *Cmd
+	var rootRet string
+
 	origDir := dir
 	for len(dir) > len(srcRoot) {
 		for _, vcs := range vcsList {
 			if _, err := os.Stat(filepath.Join(dir, "."+vcs.Cmd)); err == nil {
-				return vcs, filepath.ToSlash(dir[len(srcRoot)+1:]), nil
+				root := filepath.ToSlash(dir[len(srcRoot)+1:])
+				// Record first VCS we find, but keep looking,
+				// to detect mistakes like one kind of VCS inside another.
+				if vcsRet == nil {
+					vcsRet = vcs
+					rootRet = root
+					continue
+				}
+				// Allow .git inside .git, which can arise due to submodules.
+				if vcsRet == vcs && vcs.Cmd == "git" {
+					continue
+				}
+				// Otherwise, we have one VCS inside a different VCS.
+				return nil, "", fmt.Errorf("directory %q uses %s, but parent %q uses %s",
+					filepath.Join(srcRoot, rootRet), vcsRet.Cmd, filepath.Join(srcRoot, root), vcs.Cmd)
 			}
 		}
 
@@ -359,6 +386,10 @@ func FromDir(dir, srcRoot string) (vcs *Cmd, root string, err error) {
 			break
 		}
 		dir = ndir
+	}
+
+	if vcsRet != nil {
+		return vcsRet, rootRet, nil
 	}
 
 	return nil, "", fmt.Errorf("directory %q is not using a known version control system", origDir)
