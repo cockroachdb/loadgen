@@ -122,7 +122,7 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 				if err := sumOrderLine.QueryRow(wID, dID, oID).Scan(&olTotal); err != nil {
 					return err
 				}
-				if _, err := updateCustomer.Exec(olTotal, wID, dID, oID); err != nil {
+				if _, err := updateCustomer.Exec(olTotal, wID, dID, oCID); err != nil {
 					return err
 				}
 			}
