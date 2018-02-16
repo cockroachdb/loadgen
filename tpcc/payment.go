@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach-go/crdb"
-	"github.com/pkg/errors"
 )
 
 // Section 2.5:
@@ -150,7 +149,7 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 					ORDER BY c_first ASC`, indexStr),
 					wID, d.dID, d.cLast)
 				if err != nil {
-					return errors.Wrap(err, "select by last name fail")
+					return err
 				}
 				customers := make([]int, 0, 1)
 				for rows.Next() {
@@ -185,7 +184,7 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 				&d.cCity, &d.cState, &d.cZip, &d.cPhone, &d.cSince, &d.cCredit,
 				&d.cCreditLim, &d.cDiscount, &d.cBalance,
 			); err != nil {
-				return errors.Wrap(err, "select by customer idfail")
+				return err
 			}
 
 			if d.cCredit == "BC" {
