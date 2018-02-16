@@ -112,29 +112,6 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 		db,
 		txOpts,
 		func(tx *sql.Tx) error {
-			var wName, dName string
-			// Update warehouse with payment
-			if err := tx.QueryRow(`
-				UPDATE warehouse
-				SET w_ytd = w_ytd + $1
-				WHERE w_id = $2
-				RETURNING w_name, w_street_1, w_street_2, w_city, w_state, w_zip`,
-				d.hAmount, wID,
-			).Scan(&wName, &d.wStreet1, &d.wStreet2, &d.wCity, &d.wState, &d.wZip); err != nil {
-				return err
-			}
-
-			// Update district with payment
-			if err := tx.QueryRow(`
-				UPDATE district
-				SET d_ytd = d_ytd + $1
-				WHERE d_w_id = $2 AND d_id = $3
-				RETURNING d_name, d_street_1, d_street_2, d_city, d_state, d_zip`,
-				d.hAmount, wID, d.dID,
-			).Scan(&dName, &d.dStreet1, &d.dStreet2, &d.dCity, &d.dState, &d.dZip); err != nil {
-				return err
-			}
-
 			// If we are selecting by last name, first find the relevant customer id and
 			// then proceed.
 			if d.cID == 0 {
@@ -195,6 +172,29 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 					d.cData = d.cData[0:500]
 				}
 			}
+			var wName, dName string
+			// Update warehouse with payment
+			if err := tx.QueryRow(`
+				UPDATE warehouse
+				SET w_ytd = w_ytd + $1
+				WHERE w_id = $2
+				RETURNING w_name, w_street_1, w_street_2, w_city, w_state, w_zip`,
+				d.hAmount, wID,
+			).Scan(&wName, &d.wStreet1, &d.wStreet2, &d.wCity, &d.wState, &d.wZip); err != nil {
+				return err
+			}
+
+			// Update district with payment
+			if err := tx.QueryRow(`
+				UPDATE district
+				SET d_ytd = d_ytd + $1
+				WHERE d_w_id = $2 AND d_id = $3
+				RETURNING d_name, d_street_1, d_street_2, d_city, d_state, d_zip`,
+				d.hAmount, wID, d.dID,
+			).Scan(&dName, &d.dStreet1, &d.dStreet2, &d.dCity, &d.dState, &d.dZip); err != nil {
+				return err
+			}
+
 			hData := fmt.Sprintf("%s    %s", wName, dName)
 
 			// Insert history line.
