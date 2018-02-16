@@ -19,16 +19,9 @@ package crdb
 import (
 	"context"
 	"database/sql"
-	"fmt"
 
 	"github.com/lib/pq"
 )
-
-// AmbiguousCommitError represents an error that left a transaction in an
-// ambiguous state: unclear if it committed or not.
-type AmbiguousCommitError struct {
-	error
-}
 
 // ExecuteTx runs fn inside a transaction and retries it as needed.
 // On non-retryable failures, the transaction is aborted and rolled
@@ -37,12 +30,40 @@ type AmbiguousCommitError struct {
 // we err on RELEASE with a communication error it's unclear if the transaction
 // has been committed or not (similar to erroring on COMMIT in other databases).
 // In that case, we return AmbiguousCommitError.
+// There are cases when restarting a transaction fails: we err on ROLLBACK
+// to the SAVEPOINT. In that case, we return a TxnRestartError.
 //
 // For more information about CockroachDB's transaction model see
 // https://cockroachlabs.com/docs/stable/transactions.html.
 //
-// NOTE: the supplied exec closure should not have external side
+// NOTE: the supplied fn closure should not have external side
 // effects beyond changes to the database.
+//
+// fn must take care when wrapping errors returned from the database driver with
+// additional context. For example, if the UPDATE statement fails in the
+// following snippet, the original retryable error will be masked by the call to
+// fmt.Errorf, and the transaction will not be automatically retried.
+//
+//    crdb.ExecuteTx(ctx, db, txopts, func (tx *sql.Tx) error {
+//        if err := tx.ExecContext(ctx, "UPDATE..."); err != nil {
+//            return fmt.Errorf("updating record: %s", err)
+//        }
+//        return nil
+//    })
+//
+// Instead, add context by returning an error that implements the ErrorCauser
+// interface. Either create a custom error type that implements ErrorCauser or
+// use a helper function that does so automatically, like pkg/errors.Wrap:
+//
+//    import "github.com/pkg/errors"
+//
+//    crdb.ExecuteTx(ctx, db, txopts, func (tx *sql.Tx) error {
+//        if err := tx.ExecContext(ctx, "UPDATE..."); err != nil {
+//            return errors.Wrap(err, "updating record")
+//        }
+//        return nil
+//    })
+//
 func ExecuteTx(ctx context.Context, db *sql.DB, txopts *sql.TxOptions, fn func(*sql.Tx) error) error {
 	// Start a transaction.
 	tx, err := db.BeginTx(ctx, txopts)
@@ -64,6 +85,8 @@ type Tx interface {
 // ExecuteInTx will only retry statements that are performed within the supplied
 // closure (fn). Any statements performed on the tx before ExecuteInTx is invoked will *not*
 // be re-run if the transaction needs to be retried.
+//
+// fn is subject to the same restrictions as the fn passed to ExecuteTx.
 func ExecuteInTx(ctx context.Context, tx Tx, fn func() error) (err error) {
 	defer func() {
 		if err == nil {
@@ -96,27 +119,15 @@ func ExecuteInTx(ctx context.Context, tx Tx, fn func() error) (err error) {
 		// for either the standard PG errcode SerializationFailureError:40001 or the Cockroach extension
 		// errcode RetriableError:CR000. The Cockroach extension has been removed server-side, but support
 		// for it has been left here for now to maintain backwards compatibility.
-		pqErr, ok := err.(*pq.Error)
+		pqErr, ok := errorCause(err).(*pq.Error)
 		if retryable := ok && (pqErr.Code == "CR000" || pqErr.Code == "40001"); !retryable {
 			if released {
-				err = &AmbiguousCommitError{err}
+				err = newAmbiguousCommitError(err)
 			}
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT cockroach_restart"); err != nil {
-			// ROLLBACK TO SAVEPOINT failed. If it failed with a lib/pq error, we want
-			// to pass this error to the client, but also include the original error
-			// message and code. So, we'll do some surgery on lib/pq errors in
-			// particular.
-			// If it failed with any other error (e.g. the "driver: bad connection" is
-			// untyped), we overwrite the error.
-			msgPattern := "restarting txn failed. ROLLBACK TO SAVEPOINT encountered error: %s. " +
-				"Original error (code: %s): %s."
-			if rollbackPQErr, ok := err.(*pq.Error); ok {
-				rollbackPQErr.Message = fmt.Sprintf(msgPattern, rollbackPQErr, pqErr.Code, pqErr)
-				return rollbackPQErr
-			}
-			return fmt.Errorf(msgPattern, err, pqErr.Code, pqErr)
+		if _, retryErr := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT cockroach_restart"); retryErr != nil {
+			return newTxnRestartError(retryErr, err)
 		}
 	}
 }

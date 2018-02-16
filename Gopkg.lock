@@ -5,7 +5,7 @@
   branch = "master"
   name = "github.com/cockroachdb/cockroach-go"
   packages = ["crdb"]
-  revision = "c806b484b8611fc587b6abc07f8bb0f7824a78d6"
+  revision = "59c0560478b705bf9bd12f9252224a0fad7c87df"
 
 [[projects]]
   branch = "master"
@@ -16,14 +16,22 @@
 [[projects]]
   branch = "master"
   name = "github.com/gocql/gocql"
-  packages = [".","internal/lru","internal/murmur","internal/streams"]
-  revision = "b9337fa4c59ce1db20300290bd7a9a7063fb6784"
+  packages = [
+    ".",
+    "internal/lru",
+    "internal/murmur",
+    "internal/streams"
+  ]
+  revision = "c79450b345f160eccb363f55095de6fd5e41b3e7"
 
 [[projects]]
   branch = "master"
   name = "github.com/golang/lint"
-  packages = [".","golint"]
-  revision = "c5fb716d6688a859aae56d26d3e6070808df29f7"
+  packages = [
+    ".",
+    "golint"
+  ]
+  revision = "e14d9b0f1d332b1420c1ffa32562ad2dc84d645d"
 
 [[projects]]
   branch = "master"
@@ -40,26 +48,35 @@
 [[projects]]
   branch = "master"
   name = "github.com/kisielk/errcheck"
-  packages = [".","internal/errcheck"]
-  revision = "23699b7e2cbfdb89481023524954ba2aeff6be90"
+  packages = [
+    ".",
+    "internal/errcheck"
+  ]
+  revision = "b1445a9dd8285a50c6d1661d16f0a9ceb08125f7"
 
 [[projects]]
   branch = "master"
   name = "github.com/kisielk/gotool"
-  packages = ["."]
-  revision = "0de1eaf82fa3f583ce21fde859f1e7e0c5e9b220"
+  packages = [
+    ".",
+    "internal/load"
+  ]
+  revision = "d6ce6262d87e3a4e153e86023ff56ae771554a41"
 
 [[projects]]
   branch = "master"
   name = "github.com/lib/pq"
-  packages = [".","oid"]
-  revision = "e42267488fe361b9dc034be7a6bffef5b195bceb"
+  packages = [
+    ".",
+    "oid"
+  ]
+  revision = "88edab0803230a3898347e77b474f8c1820a1f20"
 
 [[projects]]
   branch = "master"
   name = "github.com/pkg/errors"
   packages = ["."]
-  revision = "c605e284fe17294bda444b34710735b29d1a9d90"
+  revision = "30136e27e2ac8d167177e8a583aa4c3fea5be833"
 
 [[projects]]
   branch = "master"
@@ -71,19 +88,28 @@
   branch = "master"
   name = "golang.org/x/net"
   packages = ["context"]
-  revision = "1c05540f6879653db88113bc4a2b70aec4bd491f"
+  revision = "dc948dff8834a7fe1ca525f8d04e261c2b56e70d"
 
 [[projects]]
   branch = "master"
   name = "golang.org/x/time"
   packages = ["rate"]
-  revision = "8be79e1e0910c292df4e79c241bb7e8f7e725959"
+  revision = "6dc17368e09b0e8634d71cac8168d853e869a0c7"
 
 [[projects]]
   branch = "master"
   name = "golang.org/x/tools"
-  packages = ["cmd/goimports","go/ast/astutil","go/buildutil","go/gcexportdata","go/gcimporter15","go/loader","go/types/typeutil","imports"]
-  revision = "84a35ef54dff3c5596983e180ec10919fc432242"
+  packages = [
+    "cmd/goimports",
+    "go/ast/astutil",
+    "go/buildutil",
+    "go/gcexportdata",
+    "go/gcimporter15",
+    "go/loader",
+    "go/types/typeutil",
+    "imports"
+  ]
+  revision = "ce871d178848e3eea1e8795e5cfb74053dde4bb9"
 
 [[projects]]
   name = "gopkg.in/inf.v0"
@@ -94,7 +120,13 @@
 [[projects]]
   branch = "v2"
   name = "gopkg.in/mgo.v2"
-  packages = [".","bson","internal/json","internal/sasl","internal/scram"]
+  packages = [
+    ".",
+    "bson",
+    "internal/json",
+    "internal/sasl",
+    "internal/scram"
+  ]
   revision = "3f83fa5005286a7fe593b055f0d7771a7dce4655"
 
 [solve-meta]
