@@ -49,6 +49,7 @@ type orderItem struct {
 	iPrice       float64 // item price
 	olAmount     float64 // order amount
 	olDeliveryD  pq.NullTime
+	distInfo     string // contents of s_dist_xx
 
 	remoteWarehouse bool // internal use - item from a local or remote warehouse?
 }
@@ -158,13 +159,13 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			// Insert row into the orders and new orders table.
 			if _, err := tx.Exec(`
 				INSERT INTO "order" (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING NOTHING`,
 				d.oID, d.dID, d.wID, d.cID, d.oEntryD, d.oOlCnt, allLocal); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(`
 				INSERT INTO new_order (no_o_id, no_d_id, no_w_id) 
-				VALUES ($1, $2, $3)`,
+				VALUES ($1, $2, $3) RETURNING NOTHING`,
 				d.oID, d.dID, d.wID); err != nil {
 				return err
 			}
@@ -187,7 +188,7 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			}
 			insertOrderLine, err := tx.Prepare(`
 			INSERT INTO order_line(ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_dist_info)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING NOTHING`)
 			if err != nil {
 				return err
 			}
@@ -196,7 +197,8 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			// 2.4.2.2: For each o_ol_cnt item in the order, query the relevant item
 			// row, update the stock row to account for the order, and insert a new
 			// line into the order_line table to reflect the item on the order.
-			for i, item := range d.items {
+			for i := range d.items {
+				item := &d.items[i]
 				if err := selectItem.QueryRow(item.olIID).Scan(&item.iPrice, &item.iName, &iData); err != nil {
 					if rollback && item.olIID < 0 {
 						// 2.4.2.3: roll back when we're expecting a rollback due to
@@ -209,10 +211,10 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 					return err
 				}
 
-				var distInfo, sData string
+				var sData string
 				if err := updateStock.QueryRow(
 					item.olQuantity, item.remoteWarehouse, item.olIID, item.olSupplyWID,
-				).Scan(&distInfo, &sData); err != nil {
+				).Scan(&item.distInfo, &sData); err != nil {
 					return err
 				}
 				if strings.Contains(sData, originalString) && strings.Contains(iData, originalString) {
@@ -223,6 +225,8 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 
 				item.olAmount = float64(item.olQuantity) * item.iPrice
 				d.totalAmount += item.olAmount
+			}
+			for i, item := range d.items {
 				if _, err := insertOrderLine.Exec(
 					d.oID, // ol_o_id
 					d.dID,
@@ -232,7 +236,7 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 					item.olSupplyWID,
 					item.olQuantity,
 					item.olAmount,
-					distInfo, // ol_dist_info is set to the contents of s_dist_xx
+					item.distInfo, // ol_dist_info is set to the contents of s_dist_xx
 				); err != nil {
 					return err
 				}
