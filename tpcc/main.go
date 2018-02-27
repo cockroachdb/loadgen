@@ -56,7 +56,7 @@ var mix = flag.String("mix", "newOrder=45,payment=43,orderStatus=4,delivery=4,st
 
 const (
 	minLatency = 100 * time.Microsecond
-	maxLatency = 10 * time.Second
+	maxLatency = 100 * time.Second
 )
 
 var usage = func() {
