@@ -76,6 +76,18 @@ type tx struct {
 	thinkTime  float64 // minimum mean of think time distribution, 5.2.5.7
 }
 
+func (t tx) randThinkTime() time.Duration {
+	// 5.2.5.4: Think time is taken independently from a negative exponential
+	// distribution. Think time = -log(r) * u, where r is a uniform random number
+	// between 0 and 1 and u is the mean think time per operation.
+	// Each distribution is truncated at 10 times its mean value.
+	thinkTime := -math.Log(rand.Float64()) * float64(t.thinkTime)
+	if thinkTime > (t.thinkTime * 10) {
+		thinkTime = t.thinkTime * 10
+	}
+	return time.Duration(thinkTime) * time.Second
+}
+
 // Keep this in the same order as the const type enum above, since it's used as a map from tx type
 // to struct.
 var txs = [...]tx{
@@ -172,17 +184,15 @@ func (w *worker) run(errCh chan<- error, warehouseID int) {
 				break
 			}
 		}
-		if *noWait {
-			warehouseID = rand.Intn(*warehouses)
-		} else {
-			sleepTime := float64(t.keyingTime * 1000)
+		if !*noWait {
+			sleepTime := time.Duration(t.keyingTime) * time.Second
 			if firstRun {
 				// Sleep for a random duration up to the keying time to smooth out any
 				// potential thundering herd effects when the load generator starts.
-				sleepTime = sleepTime * rand.Float64()
+				sleepTime = time.Duration(float64(sleepTime)*rand.Float64()) + t.randThinkTime()/2
 				firstRun = false
 			}
-			time.Sleep(time.Duration(sleepTime) * time.Millisecond)
+			time.Sleep(sleepTime)
 		}
 
 		start := time.Now()
@@ -206,15 +216,7 @@ func (w *worker) run(errCh chan<- error, warehouseID int) {
 		}
 
 		if !*noWait {
-			// 5.2.5.4: Think time is taken independently from a negative exponential
-			// distribution. Think time = -log(r) * u, where r is a uniform random number
-			// between 0 and 1 and u is the mean think time per operation.
-			// Each distribution is truncated at 10 times its mean value.
-			thinkTime := -math.Log(rand.Float64()) * float64(t.thinkTime)
-			if thinkTime > (t.thinkTime * 10) {
-				thinkTime = t.thinkTime * 10
-			}
-			time.Sleep(time.Duration(thinkTime) * time.Second)
+			time.Sleep(t.randThinkTime())
 		}
 	}
 }
