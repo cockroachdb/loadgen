@@ -68,10 +68,12 @@ var usage = func() {
 // numOps keeps a global count of successful operations.
 var numOps uint64
 
-func setupDatabase(parsedURL *url.URL) (*sql.DB, error) {
+func setupDatabase(parsedURL *url.URL, dbName string) (*sql.DB, error) {
 	if *verbose {
 		fmt.Printf("connecting to db: %s\n", parsedURL)
 	}
+
+	parsedURL.Path = dbName
 
 	// Open connection to server and create a database.
 	db, err := sql.Open("postgres", parsedURL.String())
@@ -98,7 +100,7 @@ func main() {
 		dbName = "tpccinterleaved"
 	}
 
-	dbURL := fmt.Sprintf("postgresql://root@localhost:26257/%s?sslmode=disable", dbName)
+	dbURL := "postgresql://root@localhost:26257/?sslmode=disable"
 	if flag.NArg() == 1 {
 		dbURL = flag.Arg(0)
 	}
@@ -109,7 +111,7 @@ func main() {
 		os.Exit(1)
 	}
 	usePostgres = parsedURL.Port() == "5432"
-	db, err := setupDatabase(parsedURL)
+	db, err := setupDatabase(parsedURL, dbName)
 
 	if *serializable {
 		txOpts = &sql.TxOptions{Isolation: sql.LevelSerializable}
