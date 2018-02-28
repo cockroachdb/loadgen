@@ -68,7 +68,7 @@ var usage = func() {
 // numOps keeps a global count of successful operations.
 var numOps uint64
 
-func setupDatabase(parsedURL *url.URL, dbName string) (*sql.DB, error) {
+func setupDatabase(parsedURL *url.URL, dbName string, nConns int) (*sql.DB, error) {
 	if *verbose {
 		fmt.Printf("connecting to db: %s\n", parsedURL)
 	}
@@ -81,9 +81,8 @@ func setupDatabase(parsedURL *url.URL, dbName string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	// Allow a maximum of concurrency+1 connections to the database.
-	db.SetMaxOpenConns(*concurrency + 1)
-	db.SetMaxIdleConns(*concurrency + 1)
+	db.SetMaxOpenConns(nConns)
+	db.SetMaxIdleConns(nConns)
 
 	return db, nil
 }
@@ -117,8 +116,9 @@ func main() {
 	}
 
 	usePostgres = dbURLs[0].Port() == "5432"
+	warehousesPerConnection := *warehouses / len(args)
 	for i, dbURL := range dbURLs {
-		db, err := setupDatabase(dbURL, dbName)
+		db, err := setupDatabase(dbURL, dbName, warehousesPerConnection)
 
 		if err != nil {
 			fmt.Printf("Setting up database connection to %s failed: %s, continuing assuming database already exists.", dbURL, err)
