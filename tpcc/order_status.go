@@ -118,6 +118,9 @@ func (o orderStatus) run(db *sql.DB, wID int) (interface{}, error) {
 					}
 					customers = append(customers, c)
 				}
+				if err := rows.Err(); err != nil {
+					return err
+				}
 				rows.Close()
 				cIdx := len(customers) / 2
 				if len(customers)%2 == 0 {
@@ -163,7 +166,7 @@ func (o orderStatus) run(db *sql.DB, wID int) (interface{}, error) {
 				}
 				d.items = append(d.items, item)
 			}
-			return nil
+			return rows.Err()
 		}); err != nil {
 		return nil, err
 	}

@@ -162,6 +162,9 @@ func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
 					}
 					customers = append(customers, cID)
 				}
+				if err := rows.Err(); err != nil {
+					return err
+				}
 				rows.Close()
 				cIdx := len(customers) / 2
 				if len(customers)%2 == 0 {
