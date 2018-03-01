@@ -264,6 +264,30 @@ func loadSchema(db *sql.DB, interleave bool, index bool, usePostgres bool) {
 	fmt.Printf("\n")
 }
 
+func splitTables(db *sql.DB, warehouses int) {
+	// Split district and warehouse tables every 100 warehouses.
+	const warehousesPerRange = 100
+	for i := warehousesPerRange; i < warehouses; i += warehousesPerRange {
+		sql := fmt.Sprintf("ALTER TABLE warehouse SPLIT AT VALUES (%d)", i)
+		if _, err := db.Exec(sql); err != nil {
+			panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
+		}
+		sql = fmt.Sprintf("ALTER TABLE district SPLIT AT VALUES (%d, 0)", i)
+		if _, err := db.Exec(sql); err != nil {
+			panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
+		}
+	}
+
+	// Split item table every 1000 items.
+	const itemsPerRange = 1000
+	for i := itemsPerRange; i < nItems; i += itemsPerRange {
+		sql := fmt.Sprintf("ALTER TABLE item SPLIT AT VALUES (%d)", i)
+		if _, err := db.Exec(sql); err != nil {
+			panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
+		}
+	}
+}
+
 func scatterRanges(db *sql.DB) {
 	tables := []string{
 		`customer`,

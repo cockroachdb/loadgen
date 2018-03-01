@@ -44,7 +44,8 @@ var maxOps = flag.Uint64("max-ops", 0, "Maximum number of operations to run")
 var noWait = flag.Bool("no-wait", false, "Run in no wait mode (no think/keying time)")
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just newOrders")
 var scatter = flag.Bool("scatter", false, "Scatter ranges")
-var run = flag.Bool("run", true, "Run benchmark.")
+var split = flag.Bool("split", false, "Split tables")
+var run = flag.Bool("run", true, "Run benchmark")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var serializable = flag.Bool("serializable", false, "Force serializable mode")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
@@ -175,6 +176,10 @@ func main() {
 
 	if *load || *loadIndexes {
 		loadSchema(db, *interleave, true, usePostgres)
+	}
+
+	if *split {
+		splitTables(db, *warehouses)
 	}
 
 	if *scatter {
