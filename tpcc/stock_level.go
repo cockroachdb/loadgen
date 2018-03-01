@@ -57,17 +57,17 @@ func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
 		dID:       rand.Intn(9) + 1,
 	}
 
-	// This is the only join in the application, so we don't need to worry about
-	// this setting persisting incorrectly across queries.
-	if _, err := db.Exec(`set experimental_force_lookup_join=true`); err != nil {
-		return nil, err
-	}
-
 	if err := crdb.ExecuteTx(
 		context.Background(),
 		db,
 		txOpts,
 		func(tx *sql.Tx) error {
+			// This is the only join in the application, so we don't need to worry about
+			// this setting persisting incorrectly across queries.
+			if _, err := tx.Exec(`set experimental_force_lookup_join=true`); err != nil {
+				return err
+			}
+
 			var dNextOID int
 			if err := tx.QueryRow(`
 				SELECT d_next_o_id

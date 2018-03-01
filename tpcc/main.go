@@ -116,10 +116,17 @@ func main() {
 	}
 
 	usePostgres = dbURLs[0].Port() == "5432"
-	warehousesPerConnection := *warehouses / len(args)
-	for i, dbURL := range dbURLs {
-		db, err := setupDatabase(dbURL, dbName, warehousesPerConnection)
 
+	var workers []*worker
+	if *noWait {
+		workers = make([]*worker, *concurrency)
+	} else {
+		// 10 workers per warehouse.
+		workers = make([]*worker, *warehouses*10)
+	}
+
+	for i, dbURL := range dbURLs {
+		db, err := setupDatabase(dbURL, dbName, len(workers)/len(dbURLs))
 		if err != nil {
 			fmt.Printf("Setting up database connection to %s failed: %s, continuing assuming database already exists.", dbURL, err)
 		}
@@ -186,17 +193,14 @@ func main() {
 	start := time.Now()
 	errCh := make(chan error)
 	var wg sync.WaitGroup
-	var workers []*worker
 	if *noWait {
-		workers = make([]*worker, *concurrency)
 		for i := range workers {
-			// In nowait mode, randomly shard the workers to each db.
-			workers[i] = newWorker(i, dbs[i%len(dbs)], &wg)
-			go workers[i].run(errCh, -1)
+			// In nowait mode, consistently assign every warehouse to a worker/db.
+			w := i % *warehouses
+			workers[i] = newWorker(i, dbs[w%len(dbs)], &wg)
+			go workers[i].run(errCh, w)
 		}
 	} else {
-		// 10 workers per warehouse.
-		workers = make([]*worker, *warehouses*10)
 		for i := 0; i < *warehouses; i++ {
 			for j := 0; j < 10; j++ {
 				idx := i*10 + j
