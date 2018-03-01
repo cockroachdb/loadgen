@@ -92,19 +92,15 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 					olDeliveryD.Format("2006-01-02 15:04:05"), wID, dID, oID)); err != nil {
 					return err
 				}
-				var olTotal float64
-				if err := tx.QueryRow(fmt.Sprintf(`
-						SELECT SUM(ol_amount) FROM order_line
-						WHERE ol_w_id = %d AND ol_d_id = %d AND ol_o_id = %d`,
-					wID, dID, oID)).Scan(&olTotal); err != nil {
-					return err
-				}
 				if _, err := tx.Exec(fmt.Sprintf(`
 						UPDATE customer
 						SET (c_balance, c_delivery_cnt) =
-							(c_balance + %f, c_delivery_cnt + 1)
+							(c_balance + (
+								SELECT SUM(ol_amount) FROM order_line
+								WHERE ol_w_id = %d AND ol_d_id = %d AND ol_o_id = %d
+							), c_delivery_cnt + 1)
 						WHERE c_w_id = %d AND c_d_id = %d AND c_id = %d`,
-					olTotal, wID, dID, oCID)); err != nil {
+					wID, dID, oID, wID, dID, oCID)); err != nil {
 					return err
 				}
 				return nil
