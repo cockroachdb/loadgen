@@ -17,6 +17,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -48,51 +49,6 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 	oCarrierID := rand.Intn(10) + 1
 	olDeliveryD := time.Now()
 
-	getNewOrder, err := db.Prepare(`
-			SELECT no_o_id
-			FROM new_order
-			WHERE no_w_id = $1 AND no_d_id = $2
-			ORDER BY no_o_id ASC
-			LIMIT 1`)
-	if err != nil {
-		return nil, err
-	}
-	delNewOrder, err := db.Prepare(`
-			DELETE FROM new_order
-			WHERE no_w_id = $1 AND no_d_id = $2 AND no_o_id = $3`)
-	if err != nil {
-		return nil, err
-	}
-	updateOrder, err := db.Prepare(`
-			UPDATE "order"
-			SET o_carrier_id = $1
-			WHERE o_w_id = $2 AND o_d_id = $3 AND o_id = $4
-			RETURNING o_c_id`)
-	if err != nil {
-		return nil, err
-	}
-	updateOrderLine, err := db.Prepare(`
-			UPDATE order_line
-			SET ol_delivery_d = $1
-			WHERE ol_w_id = $2 AND ol_d_id = $3 AND ol_o_id = $4`)
-	if err != nil {
-		return nil, err
-	}
-	sumOrderLine, err := db.Prepare(`
-			SELECT SUM(ol_amount) FROM order_line
-			WHERE ol_w_id = $1 AND ol_d_id = $2 AND ol_o_id = $3`)
-	if err != nil {
-		return nil, err
-	}
-	updateCustomer, err := db.Prepare(`
-			UPDATE customer
-			SET (c_balance, c_delivery_cnt) =
-				(c_Balance + $1, c_delivery_cnt + 1)
-			WHERE c_w_id = $2 AND c_d_id = $3 AND c_id = $4`)
-	if err != nil {
-		return nil, err
-	}
-
 	// 2.7.4.2. For each district:
 	for dID := 1; dID <= 10; dID++ {
 		if err := crdb.ExecuteTx(
@@ -101,28 +57,54 @@ func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
 			txOpts,
 			func(tx *sql.Tx) error {
 				var oID int
-				if err := getNewOrder.QueryRow(wID, dID).Scan(&oID); err != nil {
+				if err := tx.QueryRow(fmt.Sprintf(`
+						SELECT no_o_id
+						FROM new_order
+						WHERE no_w_id = %d AND no_d_id = %d
+						ORDER BY no_o_id ASC
+						LIMIT 1`,
+					wID, dID)).Scan(&oID); err != nil {
 					// If no matching order is found, the delivery of this order is skipped.
 					if err != sql.ErrNoRows {
 						return err
 					}
 					return nil
 				}
-				if _, err := delNewOrder.Exec(wID, dID, oID); err != nil {
+				if _, err := tx.Exec(fmt.Sprintf(`
+						DELETE FROM new_order
+						WHERE no_w_id = %d AND no_d_id = %d AND no_o_id = %d`,
+					wID, dID, oID)); err != nil {
 					return err
 				}
 				var oCID int
-				if err := updateOrder.QueryRow(oCarrierID, wID, dID, oID).Scan(&oCID); err != nil {
+				if err := tx.QueryRow(fmt.Sprintf(`
+						UPDATE "order"
+						SET o_carrier_id = %d
+						WHERE o_w_id = %d AND o_d_id = %d AND o_id = %d
+						RETURNING o_c_id`,
+					oCarrierID, wID, dID, oID)).Scan(&oCID); err != nil {
 					return err
 				}
-				if _, err := updateOrderLine.Exec(olDeliveryD, wID, dID, oID); err != nil {
+				if _, err := tx.Exec(fmt.Sprintf(`
+						UPDATE order_line
+						SET ol_delivery_d = '%s'
+						WHERE ol_w_id = %d AND ol_d_id = %d AND ol_o_id = %d`,
+					olDeliveryD.Format("2006-01-02 15:04:05"), wID, dID, oID)); err != nil {
 					return err
 				}
 				var olTotal float64
-				if err := sumOrderLine.QueryRow(wID, dID, oID).Scan(&olTotal); err != nil {
+				if err := tx.QueryRow(fmt.Sprintf(`
+						SELECT SUM(ol_amount) FROM order_line
+						WHERE ol_w_id = %d AND ol_d_id = %d AND ol_o_id = %d`,
+					wID, dID, oID)).Scan(&olTotal); err != nil {
 					return err
 				}
-				if _, err := updateCustomer.Exec(olTotal, wID, dID, oCID); err != nil {
+				if _, err := tx.Exec(fmt.Sprintf(`
+						UPDATE customer
+						SET (c_balance, c_delivery_cnt) =
+							(c_balance + %f, c_delivery_cnt + 1)
+						WHERE c_w_id = %d AND c_d_id = %d AND c_id = %d`,
+					olTotal, wID, dID, oCID)); err != nil {
 					return err
 				}
 				return nil
