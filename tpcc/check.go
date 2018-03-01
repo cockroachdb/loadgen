@@ -20,7 +20,6 @@ func checkConsistency(db *sql.DB) error {
 	// Reused checks
 
 	maxNewOIDs := make([]int, *warehouses*10)
-	countNewOrders := make([]int, *warehouses*10)
 
 	sliceIdx := func(wID, dID int) int {
 		return wID*10 + dID - 1
@@ -80,7 +79,6 @@ func checkConsistency(db *sql.DB) error {
 		).Scan(&minNewOID, &countNewOrder); err != nil {
 			return err
 		}
-		countNewOrders[sliceIdx(wID, dID)] = countNewOrder
 		maxNewOID := maxNewOIDs[sliceIdx(wID, dID)]
 		if maxNewOID-minNewOID+1 != countNewOrder {
 			fmt.Printf("check failed: max(no_o_id)=%d + min(no_o_id)=%d + 1 != count(*)=%d for w_id=%d d_id=%d\n",
@@ -93,16 +91,21 @@ func checkConsistency(db *sql.DB) error {
 
 	// 3.3.2.4
 	// sum(O_OL_CNT) = # of rows in the ORDER-LINE table for each warehouse/district
-	var sumOOLCnt int
+	var sumOOLCnt, countNewOrderLine int
 	if err := forEachWarehouseAndDistrict(func(wID, dID int) error {
 		if err := db.QueryRow(`SELECT sum(o_ol_cnt) FROM "order" WHERE o_w_id=$1 AND o_d_id=$2`,
 			wID, dID,
-		).Scan(sumOOLCnt); err != nil {
+		).Scan(&sumOOLCnt); err != nil {
 			return err
 		}
-		countNewOrder := countNewOrders[sliceIdx(wID, dID)]
-		if countNewOrder != sumOOLCnt {
-			fmt.Printf("check failed: count(new_orders)=%d != sum(o_ol_cnt)=%d for w_id=%d d_id=%d\n", countNewOrder, sumOOLCnt, wID, dID)
+		if err := db.QueryRow(`SELECT count(*) FROM order_line WHERE ol_w_id=$1 AND ol_d_id=$2`,
+			wID, dID,
+		).Scan(&countNewOrderLine); err != nil {
+			return err
+		}
+		if countNewOrderLine != sumOOLCnt {
+			fmt.Printf("check failed: count(order_line)=%d != sum(o_ol_cnt)=%d for w_id=%d d_id=%d\n",
+				countNewOrderLine, sumOOLCnt, wID, dID)
 		}
 		return nil
 	}); err != nil {
