@@ -46,6 +46,7 @@ var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, no
 var scatter = flag.Bool("scatter", false, "Scatter ranges")
 var split = flag.Bool("split", false, "Split tables")
 var run = flag.Bool("run", true, "Run benchmark")
+var ramp = flag.Duration("ramp", 30*time.Second, "The duration over which to ramp up workers")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var serializable = flag.Bool("serializable", false, "Force serializable mode")
 var verbose = flag.Bool("v", false, "Print verbose debug output")
@@ -211,9 +212,7 @@ func main() {
 	go func() {
 		// Starter the workers evenly spaced over 30s to avoid any thundering
 		// behavior.
-		const rampTime = 30 * time.Second
-		sleepTime := rampTime / time.Duration(len(workers))
-
+		sleepTime := *ramp / time.Duration(len(workers))
 		for i := range workers {
 			go workers[i].run(errCh)
 			time.Sleep(sleepTime)

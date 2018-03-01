@@ -186,6 +186,8 @@ func (w *worker) run(errCh chan<- error) {
 		}
 		if !*noWait {
 			sleepTime := time.Duration(t.keyingTime) * time.Second
+			// TODO(peter): now that we have the -ramp flag, do we need to do this
+			// firstRun stuff?
 			if firstRun {
 				// Sleep for a random duration up to the keying time to smooth out any
 				// potential thundering herd effects when the load generator starts.
