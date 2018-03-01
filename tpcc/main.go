@@ -43,6 +43,7 @@ var loadIndexes = flag.Bool("load-indexes", false, "Load indexes. Implied by loa
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of operations to run")
 var noWait = flag.Bool("no-wait", false, "Run in no wait mode (no think/keying time)")
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just newOrders")
+var scatter = flag.Bool("scatter", false, "Scatter ranges")
 var run = flag.Bool("run", true, "Run benchmark.")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var serializable = flag.Bool("serializable", false, "Force serializable mode")
@@ -126,7 +127,7 @@ func main() {
 	}
 
 	for i, dbURL := range dbURLs {
-		db, err := setupDatabase(dbURL, dbName, len(workers)/len(dbURLs))
+		db, err := setupDatabase(dbURL, dbName, *warehouses/len(dbURLs))
 		if err != nil {
 			fmt.Printf("Setting up database connection to %s failed: %s, continuing assuming database already exists.", dbURL, err)
 		}
@@ -176,6 +177,10 @@ func main() {
 		loadSchema(db, *interleave, true, usePostgres)
 	}
 
+	if *scatter {
+		scatterRanges(db)
+	}
+
 	if *check {
 		if err := checkConsistency(db); err != nil {
 			fmt.Printf("check consistency failed: %v\n", err)
@@ -193,24 +198,22 @@ func main() {
 	start := time.Now()
 	errCh := make(chan error)
 	var wg sync.WaitGroup
-	if *noWait {
-		for i := range workers {
-			// In nowait mode, consistently assign every warehouse to a worker/db.
-			w := i % *warehouses
-			workers[i] = newWorker(i, dbs[w%len(dbs)], &wg)
-			go workers[i].run(errCh, w)
-		}
-	} else {
-		for i := 0; i < *warehouses; i++ {
-			for j := 0; j < 10; j++ {
-				idx := i*10 + j
-				// In normal mode, consistently assign every warehouse to a db, to get
-				// an even number of warehouses per machine.
-				workers[idx] = newWorker(idx, dbs[i%len(dbs)], &wg)
-				go workers[idx].run(errCh, i)
-			}
-		}
+	for i := range workers {
+		w := i % *warehouses
+		workers[i] = newWorker(i, w, dbs[w%len(dbs)], &wg)
 	}
+
+	go func() {
+		// Starter the workers evenly spaced over 30s to avoid any thundering
+		// behavior.
+		const rampTime = 30 * time.Second
+		sleepTime := rampTime / time.Duration(len(workers))
+
+		for i := range workers {
+			go workers[i].run(errCh)
+			time.Sleep(sleepTime)
+		}
+	}()
 
 	var numErr int
 	tick := time.Tick(time.Second)
@@ -228,14 +231,6 @@ func main() {
 			done <- syscall.Signal(0)
 		}()
 	}
-
-	defer func() {
-		// Output results that mimic Go's built-in benchmark format.
-		elapsed := time.Since(start)
-		ops := atomic.LoadUint64(&txs[newOrderType].numOps)
-		fmt.Printf("%s\t%8d\t%12.1f ns/op\n",
-			"TPCC", ops, float64(elapsed.Nanoseconds())/float64(ops))
-	}()
 
 	cumLatency := hdrhistogram.New(minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
 	cumLatencyByOp := make([]*hdrhistogram.Histogram, nTxTypes)

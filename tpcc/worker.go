@@ -158,9 +158,9 @@ func initializeMix() {
 	}
 }
 
-func newWorker(i int, db *sql.DB, wg *sync.WaitGroup) *worker {
+func newWorker(i, warehouse int, db *sql.DB, wg *sync.WaitGroup) *worker {
 	wg.Add(1)
-	w := &worker{idx: i, db: db}
+	w := &worker{idx: i, db: db, warehouse: warehouse}
 	w.latency.WindowedHistogram = hdrhistogram.NewWindowed(1,
 		minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
 
@@ -172,7 +172,7 @@ func newWorker(i int, db *sql.DB, wg *sync.WaitGroup) *worker {
 	return w
 }
 
-func (w *worker) run(errCh chan<- error, warehouseID int) {
+func (w *worker) run(errCh chan<- error) {
 	for firstRun := true; ; {
 		transactionType := rand.Intn(totalWeight)
 		weightSum := 0
@@ -189,14 +189,14 @@ func (w *worker) run(errCh chan<- error, warehouseID int) {
 			if firstRun {
 				// Sleep for a random duration up to the keying time to smooth out any
 				// potential thundering herd effects when the load generator starts.
-				sleepTime = time.Duration(float64(sleepTime)*rand.Float64()) + t.randThinkTime()/2
+				sleepTime = time.Duration(float64(sleepTime) * rand.Float64())
 				firstRun = false
 			}
 			time.Sleep(sleepTime)
 		}
 
 		start := time.Now()
-		if _, err := t.run(w.db, warehouseID); err != nil {
+		if _, err := t.run(w.db, w.warehouse); err != nil {
 			errCh <- errors.Wrapf(err, "error in %s", t.name)
 			continue
 		}

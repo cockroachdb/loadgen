@@ -263,3 +263,24 @@ func loadSchema(db *sql.DB, interleave bool, index bool, usePostgres bool) {
 	}
 	fmt.Printf("\n")
 }
+
+func scatterRanges(db *sql.DB) {
+	tables := []string{
+		`customer`,
+		`district`,
+		`history`,
+		`item`,
+		`new_order`,
+		`"order"`,
+		`order_line`,
+		`stock`,
+		`warehouse`,
+	}
+
+	for _, table := range tables {
+		sql := fmt.Sprintf(`ALTER TABLE %s SCATTER`, table)
+		if _, err := db.Exec(sql); err != nil {
+			panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
+		}
+	}
+}
