@@ -68,7 +68,7 @@ var usage = func() {
 // numOps keeps a global count of successful operations.
 var numOps uint64
 
-func setupDatabase(parsedURL *url.URL, dbName string) (*sql.DB, error) {
+func setupDatabase(parsedURL *url.URL, dbName string, nConns int) (*sql.DB, error) {
 	if *verbose {
 		fmt.Printf("connecting to db: %s\n", parsedURL)
 	}
@@ -81,9 +81,8 @@ func setupDatabase(parsedURL *url.URL, dbName string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	// Allow a maximum of concurrency+1 connections to the database.
-	db.SetMaxOpenConns(*concurrency + 1)
-	db.SetMaxIdleConns(*concurrency + 1)
+	db.SetMaxOpenConns(nConns)
+	db.SetMaxIdleConns(nConns)
 
 	return db, nil
 }
@@ -100,26 +99,40 @@ func main() {
 		dbName = "tpccinterleaved"
 	}
 
-	dbURL := "postgresql://root@localhost:26257/?sslmode=disable"
-	if flag.NArg() == 1 {
-		dbURL = flag.Arg(0)
+	args := flag.Args()
+	if len(args) == 0 {
+		args = append(args, "postgresql://root@localhost:26257/?sslmode=disable")
 	}
 
-	parsedURL, err := url.Parse(dbURL)
-	if err != nil {
-		fmt.Println("Failed to parse url:", err)
-		os.Exit(1)
+	dbURLs := make([]*url.URL, len(args))
+	dbs := make([]*sql.DB, len(args))
+	for i := range args {
+		parsedURL, err := url.Parse(args[i])
+		if err != nil {
+			fmt.Println("Failed to parse url:", err)
+			os.Exit(1)
+		}
+		dbURLs[i] = parsedURL
 	}
-	usePostgres = parsedURL.Port() == "5432"
-	db, err := setupDatabase(parsedURL, dbName)
+
+	usePostgres = dbURLs[0].Port() == "5432"
+	warehousesPerConnection := *warehouses / len(args)
+	for i, dbURL := range dbURLs {
+		db, err := setupDatabase(dbURL, dbName, warehousesPerConnection)
+
+		if err != nil {
+			fmt.Printf("Setting up database connection to %s failed: %s, continuing assuming database already exists.", dbURL, err)
+		}
+
+		dbs[i] = db
+	}
 
 	if *serializable {
 		txOpts = &sql.TxOptions{Isolation: sql.LevelSerializable}
 	}
 
-	if err != nil {
-		fmt.Printf("Setting up database connection failed: %s, continuing assuming database already exists.", err)
-	}
+	// For setup, use the first db in the list.
+	db := dbs[0]
 
 	if *drop {
 		if usePostgres {
@@ -177,7 +190,8 @@ func main() {
 	if *noWait {
 		workers = make([]*worker, *concurrency)
 		for i := range workers {
-			workers[i] = newWorker(i, db, &wg)
+			// In nowait mode, randomly shard the workers to each db.
+			workers[i] = newWorker(i, dbs[i%len(dbs)], &wg)
 			go workers[i].run(errCh, -1)
 		}
 	} else {
@@ -186,7 +200,9 @@ func main() {
 		for i := 0; i < *warehouses; i++ {
 			for j := 0; j < 10; j++ {
 				idx := i*10 + j
-				workers[idx] = newWorker(idx, db, &wg)
+				// In normal mode, consistently assign every warehouse to a db, to get
+				// an even number of warehouses per machine.
+				workers[idx] = newWorker(idx, dbs[i%len(dbs)], &wg)
 				go workers[idx].run(errCh, i)
 			}
 		}
