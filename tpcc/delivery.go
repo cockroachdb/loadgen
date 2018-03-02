@@ -17,12 +17,16 @@ package main
 
 import (
 	"database/sql"
+	"log"
 	"math/rand"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"context"
 
 	"github.com/cockroachdb/cockroach-go/crdb"
+	"github.com/pkg/errors"
 )
 
 // 2.7 The Delivery Transaction
@@ -44,7 +48,68 @@ type delivery struct{}
 
 var _ tpccTx = newOrder{}
 
+type deferredDelivery struct {
+	wID       int
+	db        *sql.DB
+	startTime time.Time
+}
+
+var q = make(chan deferredDelivery, 1024)
+
+func maybeStartDeferredWorkerPool(errCh chan error, wg *sync.WaitGroup) []*worker {
+	if !*deferred {
+		return nil
+	}
+
+	// We repurpose the worker struct just for the latency calculation and
+	// waitGroup.
+	workers := make([]*worker, *deferredWorkers)
+
+	for i := 0; i < *deferredWorkers; i++ {
+		workers[i] = newWorker(i, 0, nil, wg)
+	}
+	for i := range workers {
+		go func(i int) {
+			w := workers[i]
+			for {
+				d := <-q
+				if _, err := d.run(); err != nil {
+					errCh <- errors.Wrapf(err, "error in deferred delivery")
+				}
+
+				elapsed := clampLatency(time.Since(d.startTime), minLatency, maxLatency).Nanoseconds()
+				w.latency.Lock()
+				if err := w.latency.Current.RecordValue(elapsed); err != nil {
+					log.Fatal(err)
+				}
+				if err := w.latency.byOp[deliveryType].Current.RecordValue(elapsed); err != nil {
+					log.Fatal(err)
+				}
+				w.latency.Unlock()
+				atomic.AddUint64(&txs[deliveryType].numOps, 1)
+				v := atomic.AddUint64(&numOps, 1)
+				if *maxOps > 0 && v >= *maxOps {
+					return
+				}
+			}
+		}(i)
+	}
+	return workers
+}
+
 func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
+	d := deferredDelivery{wID: wID, db: db, startTime: time.Now()}
+	if *deferred {
+		q <- d
+		return "Delivery queued.", nil
+	}
+	return d.run()
+}
+
+func (d deferredDelivery) run() (interface{}, error) {
+	wID := d.wID
+	db := d.db
+
 	oCarrierID := rand.Intn(10) + 1
 	olDeliveryD := time.Now()
 

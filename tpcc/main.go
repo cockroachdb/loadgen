@@ -35,6 +35,8 @@ import (
 
 var check = flag.Bool("check", false, "Run consistency checks.")
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of terminals (ignored unless -no-wait is specified)")
+var deferred = flag.Bool("deferred", true, "Use deferred mode for Delivery txns (default is true, to spec)")
+var deferredWorkers = flag.Int("deferred-workers", 1, "Number of workers in deferred execution pool")
 var drop = flag.Bool("drop", false, "Drop the database and recreate")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
 var interleave = flag.Bool("interleave", false, "Use interleaved data")
@@ -210,14 +212,17 @@ func main() {
 	}
 
 	go func() {
-		// Starter the workers evenly spaced over 30s to avoid any thundering
-		// behavior.
+		// Start the workers evenly spaced over the ramp period to avoid any thundering
+		// herd behavior.
 		sleepTime := *ramp / time.Duration(len(workers))
 		for i := range workers {
 			go workers[i].run(errCh)
 			time.Sleep(sleepTime)
 		}
 	}()
+
+	extraWorkers := maybeStartDeferredWorkerPool(errCh, &wg)
+	workers = append(workers, extraWorkers...)
 
 	var numErr int
 	tick := time.Tick(time.Second)

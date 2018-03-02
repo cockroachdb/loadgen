@@ -121,7 +121,7 @@ var txs = [...]tx{
 var totalWeight int
 
 // deck contains indexes into the txs slice.
-var deck []int
+var deck []txType
 
 func initializeMix() {
 	nameToTx := make(map[string]txType)
@@ -150,10 +150,10 @@ func initializeMix() {
 		txs[txIdx].weight = weight
 		totalWeight += weight
 	}
-	deck = make([]int, 0, totalWeight)
+	deck = make([]txType, 0, totalWeight)
 	for i, t := range txs {
 		for j := 0; j < t.weight; j++ {
-			deck = append(deck, i)
+			deck = append(deck, txType(i))
 		}
 	}
 
@@ -183,7 +183,7 @@ func newWorker(i, warehouse int, db *sql.DB, wg *sync.WaitGroup) *worker {
 }
 
 func (w *worker) run(errCh chan<- error) {
-	deckPerm := make([]int, len(deck))
+	deckPerm := make([]txType, len(deck))
 	copy(deckPerm, deck)
 	permIdx := len(deck)
 
@@ -223,19 +223,24 @@ func (w *worker) run(errCh chan<- error) {
 			errCh <- errors.Wrapf(err, "error in %s", t.name)
 			continue
 		}
-		elapsed := clampLatency(time.Since(start), minLatency, maxLatency).Nanoseconds()
-		w.latency.Lock()
-		if err := w.latency.Current.RecordValue(elapsed); err != nil {
-			log.Fatal(err)
-		}
-		if err := w.latency.byOp[opIdx].Current.RecordValue(elapsed); err != nil {
-			log.Fatal(err)
-		}
-		w.latency.Unlock()
-		atomic.AddUint64(&txs[opIdx].numOps, 1)
-		v := atomic.AddUint64(&numOps, 1)
-		if *maxOps > 0 && v >= *maxOps {
-			return
+
+		// Don't record latency statstics for delivery if we're in deferred mode.
+		// Its latency gets recorded by the delivery worker pool.
+		if !*deferred || opIdx != deliveryType {
+			elapsed := clampLatency(time.Since(start), minLatency, maxLatency).Nanoseconds()
+			w.latency.Lock()
+			if err := w.latency.Current.RecordValue(elapsed); err != nil {
+				log.Fatal(err)
+			}
+			if err := w.latency.byOp[opIdx].Current.RecordValue(elapsed); err != nil {
+				log.Fatal(err)
+			}
+			w.latency.Unlock()
+			atomic.AddUint64(&txs[opIdx].numOps, 1)
+			v := atomic.AddUint64(&numOps, 1)
+			if *maxOps > 0 && v >= *maxOps {
+				return
+			}
 		}
 
 		if !*noWait {
