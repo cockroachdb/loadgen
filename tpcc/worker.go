@@ -187,7 +187,7 @@ func (w *worker) run(errCh chan<- error) {
 	copy(deckPerm, deck)
 	permIdx := len(deck)
 
-	for firstRun := true; ; {
+	for {
 		// 5.2.4.2: the required mix is achieved by selecting each new transaction
 		// uniformly at random from a deck whose content guarantees the required
 		// transaction mix. Each pass through a deck must be made in a different
@@ -206,16 +206,7 @@ func (w *worker) run(errCh chan<- error) {
 		permIdx++
 
 		if !*noWait {
-			sleepTime := time.Duration(t.keyingTime) * time.Second
-			// TODO(peter): now that we have the -ramp flag, do we need to do this
-			// firstRun stuff?
-			if firstRun {
-				// Sleep for a random duration up to the keying time to smooth out any
-				// potential thundering herd effects when the load generator starts.
-				sleepTime = time.Duration(float64(sleepTime) * rand.Float64())
-				firstRun = false
-			}
-			time.Sleep(sleepTime)
+			time.Sleep(time.Duration(t.keyingTime) * time.Second)
 		}
 
 		start := time.Now()
