@@ -55,7 +55,7 @@ var warehouses = flag.Int("warehouses", 1, "number of warehouses for loading")
 var usePostgres bool
 var txOpts *sql.TxOptions
 
-var mix = flag.String("mix", "newOrder=45,payment=43,orderStatus=4,delivery=4,stockLevel=4", "Weights for the transaction mix. The default matches the TPCC spec.")
+var mix = flag.String("mix", "newOrder=10,payment=10,orderStatus=1,delivery=1,stockLevel=1", "Weights for the transaction mix. The default matches the TPCC spec.")
 
 const (
 	minLatency = 100 * time.Microsecond

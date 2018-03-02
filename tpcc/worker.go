@@ -120,6 +120,9 @@ var txs = [...]tx{
 
 var totalWeight int
 
+// deck contains indexes into the txs slice.
+var deck []int
+
 func initializeMix() {
 	nameToTx := make(map[string]txType)
 	for i, tx := range txs {
@@ -147,6 +150,13 @@ func initializeMix() {
 		txs[txIdx].weight = weight
 		totalWeight += weight
 	}
+	deck = make([]int, 0, totalWeight)
+	for i, t := range txs {
+		for j := 0; j < t.weight; j++ {
+			deck = append(deck, i)
+		}
+	}
+
 	if *verbose {
 		scaleFactor := 100.0 / float64(totalWeight)
 
@@ -173,17 +183,28 @@ func newWorker(i, warehouse int, db *sql.DB, wg *sync.WaitGroup) *worker {
 }
 
 func (w *worker) run(errCh chan<- error) {
+	deckPerm := make([]int, len(deck))
+	copy(deckPerm, deck)
+	permIdx := len(deck)
+
 	for firstRun := true; ; {
-		transactionType := rand.Intn(totalWeight)
-		weightSum := 0
-		var i int
-		var t tx
-		for i, t = range txs {
-			weightSum += t.weight
-			if transactionType < weightSum {
-				break
-			}
+		// 5.2.4.2: the required mix is achieved by selecting each new transaction
+		// uniformly at random from a deck whose content guarantees the required
+		// transaction mix. Each pass through a deck must be made in a different
+		// uniformly random order.
+		if permIdx == len(deck) {
+			rand.Shuffle(len(deckPerm), func(i, j int) {
+				deckPerm[i], deckPerm[j] = deckPerm[j], deckPerm[i]
+			})
+			permIdx = 0
 		}
+		// Move through our permutation slice until its exhausted, using each value to
+		// to index into our deck of transactions, which contains indexes into the
+		// txs slice.
+		opIdx := deckPerm[permIdx]
+		t := txs[opIdx]
+		permIdx++
+
 		if !*noWait {
 			sleepTime := time.Duration(t.keyingTime) * time.Second
 			// TODO(peter): now that we have the -ramp flag, do we need to do this
@@ -207,11 +228,11 @@ func (w *worker) run(errCh chan<- error) {
 		if err := w.latency.Current.RecordValue(elapsed); err != nil {
 			log.Fatal(err)
 		}
-		if err := w.latency.byOp[i].Current.RecordValue(elapsed); err != nil {
+		if err := w.latency.byOp[opIdx].Current.RecordValue(elapsed); err != nil {
 			log.Fatal(err)
 		}
 		w.latency.Unlock()
-		atomic.AddUint64(&txs[i].numOps, 1)
+		atomic.AddUint64(&txs[opIdx].numOps, 1)
 		v := atomic.AddUint64(&numOps, 1)
 		if *maxOps > 0 && v >= *maxOps {
 			return
