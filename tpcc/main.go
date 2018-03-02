@@ -292,17 +292,18 @@ func main() {
 			elapsed := now.Sub(lastNow)
 			ops := numOps
 			if i%20 == 0 {
-				fmt.Println("_time______opName__ops/s(inst)__ops/s(cum)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
+				fmt.Println("_time______opName__ops/s(inst)__ops/s(cum)__p50(ms)__p90(ms)__p95(ms)__p99(ms)_pMax(ms)")
 			}
 			i++
 			totalTime := time.Duration(time.Since(start).Seconds()+0.5) * time.Second
 			if *opsStats {
-				fmt.Printf("%5s %11s %12.1f %11.1f %8.1f %8.1f %8.1f %8.1f\n",
+				fmt.Printf("%5s %11s %12.1f %11.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n",
 					totalTime,
 					"all",
 					float64(ops-lastOps)/elapsed.Seconds(),
 					float64(ops)/time.Since(start).Seconds(),
 					time.Duration(h.ValueAtQuantile(50)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(90)).Seconds()*1000,
 					time.Duration(h.ValueAtQuantile(95)).Seconds()*1000,
 					time.Duration(h.ValueAtQuantile(99)).Seconds()*1000,
 					time.Duration(h.ValueAtQuantile(100)).Seconds()*1000)
@@ -312,12 +313,13 @@ func main() {
 				cumLatencyByOp[i].Merge(h)
 				numOpsByOp := atomic.LoadUint64(&txs[i].numOps)
 				if *opsStats || txType(i) == newOrderType {
-					fmt.Printf("%5s %11s %12.1f %11.1f %8.1f %8.1f %8.1f %8.1f\n",
+					fmt.Printf("%5s %11s %12.1f %11.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n",
 						totalTime,
 						txs[i].name,
 						float64(numOpsByOp-lastOpsByOp[i])/elapsed.Seconds(),
 						float64(numOpsByOp)/time.Since(start).Seconds(),
 						time.Duration(h.ValueAtQuantile(50)).Seconds()*1000,
+						time.Duration(h.ValueAtQuantile(90)).Seconds()*1000,
 						time.Duration(h.ValueAtQuantile(95)).Seconds()*1000,
 						time.Duration(h.ValueAtQuantile(99)).Seconds()*1000,
 						time.Duration(h.ValueAtQuantile(100)).Seconds()*1000)
@@ -337,17 +339,21 @@ func main() {
 				cumLatency.Merge(m)
 			}
 
-			ops := atomic.LoadUint64(&txs[newOrderType].numOps)
-			elapsed := time.Since(start).Seconds()
-			fmt.Println("\n_elapsed___newOrders___tpmC(cum)__avg(ms)__p50(ms)__p95(ms)__p99(ms)_pMax(ms)")
-			fmt.Printf("%7.1fs %11d %11.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n\n",
-				time.Since(start).Seconds(),
-				ops, float64(ops)/elapsed*60,
-				time.Duration(cumLatencyByOp[newOrderType].Mean()).Seconds()*1000,
-				time.Duration(cumLatencyByOp[newOrderType].ValueAtQuantile(50)).Seconds()*1000,
-				time.Duration(cumLatencyByOp[newOrderType].ValueAtQuantile(95)).Seconds()*1000,
-				time.Duration(cumLatencyByOp[newOrderType].ValueAtQuantile(99)).Seconds()*1000,
-				time.Duration(cumLatencyByOp[newOrderType].ValueAtQuantile(100)).Seconds()*1000)
+			fmt.Println("\n_elapsed______opName__ops(total)__ops/m(cum)__avg(ms)__p50(ms)__p90(ms)__p95(ms)__p99(ms)_pMax(ms)")
+			totalTime := time.Since(start).Seconds()
+			for i, h := range cumLatencyByOp {
+				ops := atomic.LoadUint64(&txs[i].numOps)
+				fmt.Printf("%7.1fs %11s %11d %11.1f %8.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n",
+					totalTime,
+					txs[i].name,
+					ops, float64(ops)/totalTime*60,
+					time.Duration(h.Mean()).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(50)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(90)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(95)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(99)).Seconds()*1000,
+					time.Duration(h.ValueAtQuantile(100)).Seconds()*1000)
+			}
 			return
 		}
 	}

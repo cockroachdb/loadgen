@@ -264,6 +264,8 @@ func loadSchema(db *sql.DB, interleave bool, index bool, usePostgres bool) {
 	fmt.Printf("\n")
 }
 
+// NB: Since we always split at the same points (specific warehouse IDs and
+// item IDs), splitting is idempotent.
 func splitTables(db *sql.DB, warehouses int) {
 	// Split district and warehouse tables every 100 warehouses.
 	const warehousesPerRange = 100
