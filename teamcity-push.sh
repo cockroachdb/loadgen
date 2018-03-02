@@ -48,7 +48,7 @@ for proj in kv ycsb tpch tpcc ; do
         --workdir=/go/src/github.com/cockroachdb/loadgen \
         --volume="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)":/go/src/github.com/cockroachdb/loadgen \
         --rm \
-        cockroachdb/builder:20170422-212842 make ${proj} STATIC=1
+        cockroachdb/builder:20180220-200046 make ${proj} STATIC=1
     strip -S ${proj}/${proj}
     push_one_binary ${proj}/${proj}
 done
