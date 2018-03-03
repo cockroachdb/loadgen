@@ -17,6 +17,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"math/rand"
 
 	"context"
@@ -69,28 +70,28 @@ func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
 			}
 
 			var dNextOID int
-			if err := tx.QueryRow(`
+			if err := tx.QueryRow(fmt.Sprintf(`
 				SELECT d_next_o_id
 				FROM district
-				WHERE d_w_id = $1 AND d_id = $2`,
-				wID, d.dID,
+				WHERE d_w_id = %[1]d AND d_id = %[2]d`,
+				wID, d.dID),
 			).Scan(&dNextOID); err != nil {
 				return err
 			}
 
 			// Count the number of recently sold items that have a stock level below
 			// the threshold.
-			return tx.QueryRow(`
+			return tx.QueryRow(fmt.Sprintf(`
 				SELECT COUNT(DISTINCT(s_i_id))
 				FROM order_line
 				JOIN stock
 				ON s_i_id=ol_i_id
 				  AND s_w_id=ol_w_id
-				WHERE ol_w_id = $1
-				  AND ol_d_id = $2
-				  AND ol_o_id BETWEEN $3 - 20 AND $3 - 1
-				  AND s_quantity < $4`,
-				wID, d.dID, dNextOID, d.threshold,
+				WHERE ol_w_id = %[1]d
+				  AND ol_d_id = %[2]d
+				  AND ol_o_id BETWEEN %[3]d - 20 AND %[3]d - 1
+				  AND s_quantity < %[4]d`,
+				wID, d.dID, dNextOID, d.threshold),
 			).Scan(&d.lowStock)
 		}); err != nil {
 		return nil, err

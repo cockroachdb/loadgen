@@ -145,31 +145,31 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 		func(tx *sql.Tx) error {
 			// Select the district tax rate and next available order number, bumping it.
 			var dNextOID int
-			if err := tx.QueryRow(`
+			if err := tx.QueryRow(fmt.Sprintf(`
 				UPDATE district
 				SET d_next_o_id = d_next_o_id + 1
-				WHERE d_w_id = $1 AND d_id = $2
+				WHERE d_w_id = %[1]d AND d_id = %[2]d
 				RETURNING d_tax, d_next_o_id`,
-				d.wID, d.dID,
+				d.wID, d.dID),
 			).Scan(&d.dTax, &dNextOID); err != nil {
 				return err
 			}
 			d.oID = dNextOID - 1
 
 			// Select the warehouse tax rate.
-			if err := tx.QueryRow(
-				`SELECT w_tax FROM warehouse WHERE w_id = $1`,
-				wID,
+			if err := tx.QueryRow(fmt.Sprintf(`
+				SELECT w_tax FROM warehouse WHERE w_id = %[1]d`,
+				wID),
 			).Scan(&d.wTax); err != nil {
 				return err
 			}
 
 			// Select the customer's discount, last name and credit.
-			if err := tx.QueryRow(`
+			if err := tx.QueryRow(fmt.Sprintf(`
 				SELECT c_discount, c_last, c_credit
 				FROM customer
-				WHERE c_w_id = $1 AND c_d_id = $2 AND c_id = $3`,
-				d.wID, d.dID, d.cID,
+				WHERE c_w_id = %[1]d AND c_d_id = %[2]d AND c_id = %[3]d`,
+				d.wID, d.dID, d.cID),
 			).Scan(&d.cDiscount, &d.cLast, &d.cCredit); err != nil {
 				return err
 			}
@@ -177,19 +177,16 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			// 2.4.2.2: For each o_ol_cnt item in the order, query the relevant item
 			// row, update the stock row to account for the order, and insert a new
 			// line into the order_line table to reflect the item on the order.
-			itemIDs := make([]interface{}, d.oOlCnt)
-			itemIDPls := make([]string, d.oOlCnt)
+			itemIDs := make([]string, d.oOlCnt)
 			for i, item := range d.items {
-				itemIDs[i] = item.olIID
-				itemIDPls[i] = fmt.Sprintf("$%d", i+1)
+				itemIDs[i] = fmt.Sprint(item.olIID)
 			}
 			rows, err := tx.Query(fmt.Sprintf(`
 				SELECT i_price, i_name, i_data
 				FROM item
-				WHERE i_id IN (%s)
+				WHERE i_id IN (%[1]s)
 				ORDER BY i_id`,
-				strings.Join(itemIDPls, ", ")),
-				itemIDs...,
+				strings.Join(itemIDs, ", ")),
 			)
 			if err != nil {
 				return err
@@ -225,20 +222,16 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			}
 			rows.Close()
 
-			stockIDs := make([]interface{}, 2*d.oOlCnt)
-			stockIDPls := make([]string, d.oOlCnt)
+			stockIDs := make([]string, d.oOlCnt)
 			for i, item := range d.items {
-				stockIDs[2*i] = item.olIID
-				stockIDs[2*i+1] = item.olSupplyWID
-				stockIDPls[i] = fmt.Sprintf("($%d, $%d)", 2*i+1, 2*i+2)
+				stockIDs[i] = fmt.Sprintf("(%d, %d)", item.olIID, item.olSupplyWID)
 			}
 			rows, err = tx.Query(fmt.Sprintf(`
-				SELECT s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02d
+				SELECT s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[1]d
 				FROM stock
-				WHERE (s_i_id, s_w_id) IN (%s)
+				WHERE (s_i_id, s_w_id) IN (%[2]s)
 				ORDER BY s_i_id`,
-				d.dID, strings.Join(stockIDPls, ", ")),
-				stockIDs...,
+				d.dID, strings.Join(stockIDs, ", ")),
 			)
 			if err != nil {
 				return err
@@ -279,10 +272,10 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 					newSRemoteCnt++
 				}
 
-				sQuantityUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDPls[i], newSQuantity)
-				sYtdUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDPls[i], sYtd+item.olQuantity)
-				sOrderCntUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDPls[i], sOrderCnt+1)
-				sRemoteCntUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDPls[i], newSRemoteCnt)
+				sQuantityUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], newSQuantity)
+				sYtdUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], sYtd+item.olQuantity)
+				sOrderCntUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], sOrderCnt+1)
+				sRemoteCntUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], newSRemoteCnt)
 			}
 			if rows.Next() {
 				return errors.New("extra stock row")
@@ -293,16 +286,18 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			rows.Close()
 
 			// Insert row into the orders and new orders table.
-			if _, err := tx.Exec(`
+			if _, err := tx.Exec(fmt.Sprintf(`
 				INSERT INTO "order" (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-				d.oID, d.dID, d.wID, d.cID, d.oEntryD, d.oOlCnt, allLocal); err != nil {
+				VALUES (%[1]d, %[2]d, %[3]d, %[4]d, '%[5]s', %[6]d, %[7]d)`,
+				d.oID, d.dID, d.wID, d.cID, d.oEntryD.Format("2006-01-02 15:04:05"),
+				d.oOlCnt, allLocal),
+			); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(`
+			if _, err := tx.Exec(fmt.Sprintf(`
 				INSERT INTO new_order (no_o_id, no_d_id, no_w_id) 
-				VALUES ($1, $2, $3)`,
-				d.oID, d.dID, d.wID); err != nil {
+				VALUES (%[1]d, %[2]d, %[3]d)`,
+				d.oID, d.dID, d.wID)); err != nil {
 				return err
 			}
 
@@ -310,17 +305,16 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			if _, err := tx.Exec(fmt.Sprintf(`
 				UPDATE stock
 				SET
-					s_quantity = CASE (s_i_id, s_w_id) %s ELSE crdb_internal.force_error('', 'unknown case') END,
-					s_ytd = CASE (s_i_id, s_w_id) %s END,
-					s_order_cnt = CASE (s_i_id, s_w_id) %s END,
-					s_remote_cnt = CASE (s_i_id, s_w_id) %s END
-				WHERE (s_i_id, s_w_id) IN (%s)`,
+					s_quantity = CASE (s_i_id, s_w_id) %[1]s ELSE crdb_internal.force_error('', 'unknown case') END,
+					s_ytd = CASE (s_i_id, s_w_id) %[2]s END,
+					s_order_cnt = CASE (s_i_id, s_w_id) %[3]s END,
+					s_remote_cnt = CASE (s_i_id, s_w_id) %[4]s END
+				WHERE (s_i_id, s_w_id) IN (%[5]s)`,
 				strings.Join(sQuantityUpdateCases, " "),
 				strings.Join(sYtdUpdateCases, " "),
 				strings.Join(sOrderCntUpdateCases, " "),
 				strings.Join(sRemoteCntUpdateCases, " "),
-				strings.Join(stockIDPls, ", ")),
-				stockIDs...,
+				strings.Join(stockIDs, ", ")),
 			); err != nil {
 				return err
 			}
