@@ -69,7 +69,7 @@ func (o orderStatus) run(db *sql.DB, wID int) (interface{}, error) {
 
 	// 2.6.1.2: The customer is randomly selected 60% of the time by last name
 	// and 40% by number.
-	if rand.Intn(9) < 6 {
+	if rand.Intn(100) < 60 {
 		d.cLast = randCLast()
 	} else {
 		d.cID = randCustomerID()
