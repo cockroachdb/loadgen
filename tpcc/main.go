@@ -35,11 +35,14 @@ import (
 
 var check = flag.Bool("check", false, "Run consistency checks.")
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of terminals (ignored unless -no-wait is specified)")
+var connsPerURL = flag.Int("conns-per-url", 0, "Number of connections to open per url")
 var drop = flag.Bool("drop", false, "Drop the database and recreate")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
 var interleave = flag.Bool("interleave", false, "Use interleaved data")
 var load = flag.Bool("load", false, "Generate fresh TPCC data. Use with -drop")
-var loadIndexes = flag.Bool("load-indexes", false, "Load indexes. Implied by load. Don't need to use this normally.")
+var loadIndexes = flag.Bool("load-indexes", true, "Load indexes.")
+var loadOffset = flag.Int("load-offset", 0, "Warehouse offset for loading")
+var loadSchema = flag.Bool("load-schema", true, "Load schema.")
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of operations to run")
 var noWait = flag.Bool("no-wait", false, "Run in no wait mode (no think/keying time)")
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just newOrders")
@@ -128,8 +131,11 @@ func main() {
 		workers = make([]*worker, *warehouses*10)
 	}
 
+	if *connsPerURL == 0 {
+		*connsPerURL = *warehouses
+	}
 	for i, dbURL := range dbURLs {
-		db, err := setupDatabase(dbURL, dbName, *warehouses/len(dbURLs))
+		db, err := setupDatabase(dbURL, dbName, *connsPerURL/len(dbURLs))
 		if err != nil {
 			fmt.Printf("Setting up database connection to %s failed: %s, continuing assuming database already exists.", dbURL, err)
 		}
@@ -159,24 +165,26 @@ func main() {
 	}
 
 	if *load {
-		if usePostgres {
-			if _, err := db.Exec("CREATE SCHEMA IF NOT EXISTS public"); err != nil {
-				fmt.Println("couldn't drop database:", err)
-				os.Exit(1)
+		if *loadSchema {
+			if usePostgres {
+				if _, err := db.Exec("CREATE SCHEMA IF NOT EXISTS public"); err != nil {
+					fmt.Println("couldn't drop database:", err)
+					os.Exit(1)
+				}
+			} else {
+				if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS " + dbName); err != nil {
+					fmt.Println("couldn't create database: ", err)
+					os.Exit(1)
+				}
 			}
-		} else {
-			if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS " + dbName); err != nil {
-				fmt.Println("couldn't create database: ", err)
-				os.Exit(1)
-			}
-		}
 
-		loadSchema(db, *interleave, false, usePostgres)
-		generateData(db)
+			doLoadSchema(db, *interleave, false, usePostgres)
+		}
+		generateData(db, *loadOffset)
 	}
 
-	if *load || *loadIndexes {
-		loadSchema(db, *interleave, true, usePostgres)
+	if *loadIndexes {
+		doLoadSchema(db, *interleave, true, usePostgres)
 	}
 
 	if *split {

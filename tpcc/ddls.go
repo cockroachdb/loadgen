@@ -234,8 +234,8 @@ create table order_line (
 	},
 }
 
-// loadSchema loads the entire TPCC schema into the database.
-func loadSchema(db *sql.DB, interleave bool, index bool, usePostgres bool) {
+// doLoadSchema loads the entire TPCC schema into the database.
+func doLoadSchema(db *sql.DB, interleave bool, index bool, usePostgres bool) {
 	schemaType := "tables"
 	if index {
 		schemaType = "indexes"

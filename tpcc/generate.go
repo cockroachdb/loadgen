@@ -57,7 +57,7 @@ func prepare(db *sql.DB, query string) *sql.Stmt {
 	return stmt
 }
 
-func parallelLoad(n int, batchSize int, entityName string, loader func(int, int)) {
+func parallelLoad(n int, batchSize int, entityName string, depth int, loader func(int, int)) {
 	if n%batchSize != 0 {
 		log.Fatalf("invalid batch size doesn't divide n: %d %d", batchSize, n)
 	}
@@ -87,17 +87,20 @@ func parallelLoad(n int, batchSize int, entityName string, loader func(int, int)
 	}()
 
 	i := 1
+	spacer := strings.Repeat("  ", depth)
 	for range outCh {
-		fmt.Printf("Loaded %d/%d %ss\r", i*batchSize, n, entityName)
+		fmt.Printf("%sLoaded %d/%d %ss\r", spacer, i*batchSize, n, entityName)
 		i++
 	}
 	fmt.Printf("\n")
 	elapsed := time.Since(start)
-	fmt.Printf("%s\t%8d\t%12.1f ns/op\n",
-		"TPCCLoad"+strings.Title(entityName), n, float64(elapsed.Nanoseconds())/float64(n))
+	if *verbose {
+		fmt.Printf("%s\t%8d\t%12.1f ns/op\n",
+			"TPCCLoad"+strings.Title(entityName), n, float64(elapsed.Nanoseconds())/float64(n))
+	}
 }
 
-func generateData(db *sql.DB) {
+func generateData(db *sql.DB, warehouseOffset int) {
 	stmtWarehouse := prepare(db, `
 INSERT INTO warehouse (w_id, w_name, w_street_1, w_street_2, w_city, w_state, w_zip, w_tax, w_ytd)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`)
@@ -110,28 +113,35 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 	// See section 1.3 for the general layout of the tables.
 	// See section 4.3 for the rules on how to populate the database.
 
-	// 100,000 items.
-	parallelLoad(nItems, 1000, "item", func(id int, batchSize int) {
-		stmtStr := "INSERT INTO item (i_id, i_im_id, i_name, i_price, i_data) VALUES "
-		for i := id; i < id+batchSize; i++ {
-			if i != id {
-				stmtStr += ","
+	nItems := 0
+	if err := db.QueryRow(`SELECT COUNT(*) FROM item`).Scan(&nItems); err != nil {
+		panic(err)
+	}
+	if nItems == 0 {
+		// Only load items if we haven't loaded them already.
+		// 100,000 items.
+		parallelLoad(nItems, 1000, "item", 1, func(id int, batchSize int) {
+			stmtStr := "INSERT INTO item (i_id, i_im_id, i_name, i_price, i_data) VALUES "
+			for i := id; i < id+batchSize; i++ {
+				if i != id {
+					stmtStr += ","
+				}
+				stmtStr += fmt.Sprintf("(%d,%d,'%s',%f,'%s')",
+					i,
+					randInt(1, 10000),                         // im_id: "Image ID associated to Item"
+					randAString(14, 24),                       // name
+					float64(randInt(100, 10000))/float64(100), // price
+					randOriginalString(),
+				)
 			}
-			stmtStr += fmt.Sprintf("(%d,%d,'%s',%f,'%s')",
-				i,
-				randInt(1, 10000),                         // im_id: "Image ID associated to Item"
-				randAString(14, 24),                       // name
-				float64(randInt(100, 10000))/float64(100), // price
-				randOriginalString(),
-			)
-		}
-		if _, err := db.Exec(stmtStr); err != nil {
-			panic(err)
-		}
-	})
+			if _, err := db.Exec(stmtStr); err != nil {
+				panic(err)
+			}
+		})
+	}
 
-	for wID := 0; wID < *warehouses; wID++ {
-		fmt.Printf("Loading warehouse %d/%d\n", wID+1, *warehouses)
+	for wID := warehouseOffset; wID < *warehouses+warehouseOffset; wID++ {
+		fmt.Printf("Loading warehouse %d/%d\n", wID+1, *warehouses+warehouseOffset)
 
 		warehouseStart := time.Now()
 		nowString := warehouseStart.Format("2006-01-02 15:04:05")
@@ -149,7 +159,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 		}
 
 		// 100,000 stock per warehouse.
-		parallelLoad(nStock, 1000, "stock", func(id int, batchSize int) {
+		parallelLoad(nStock, 1000, "stock", 1, func(id int, batchSize int) {
 			stmtStr := `INSERT INTO stock (
 	s_i_id, s_w_id, s_quantity,
 	s_dist_01, s_dist_02, s_dist_03, s_dist_04, s_dist_05, s_dist_06, s_dist_07, s_dist_08, s_dist_09, s_dist_10,
@@ -185,7 +195,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 
 		// 10 districts per warehouse
 		for dID := 1; dID <= 10; dID++ {
-			fmt.Printf("Loading district %d/10...\n", dID)
+			fmt.Printf("  Loading district %d/10...\n", dID)
 			if _, err := stmtDistrict.Exec(dID, wID,
 				randAString(6, 10),  // name
 				randAString(10, 20), // street 1
@@ -200,7 +210,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
 			}
 
 			// 3000 customers per district
-			parallelLoad(nCustomers, 1000, "customer", func(id int, batchSize int) {
+			parallelLoad(nCustomers, 1000, "customer", 3, func(id int, batchSize int) {
 				stmtStr := `INSERT INTO customer (
 	c_id, c_d_id, c_w_id, c_first, c_middle, c_last,
 	c_street_1, c_street_2, c_city, c_state, c_zip,
@@ -270,7 +280,7 @@ VALUES `
 			for i, cID := range rand.Perm(nCustomers) {
 				randomCIDs[i] = cID + 1
 			}
-			parallelLoad(nCustomers, 1000, "order", func(i int, batchSize int) {
+			parallelLoad(nCustomers, 1000, "order", 3, func(i int, batchSize int) {
 				stmtStr := `INSERT INTO "order" (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_carrier_id, o_ol_cnt, o_all_local) VALUES `
 				stmtNewOrderStr := `INSERT INTO new_order (no_o_id, no_d_id, no_w_id) VALUES `
 				haveNewOrders := false
