@@ -37,6 +37,7 @@ var check = flag.Bool("check", false, "Run consistency checks.")
 var concurrency = flag.Int("concurrency", 2*runtime.NumCPU(), "Number of terminals (ignored unless -no-wait is specified)")
 var drop = flag.Bool("drop", false, "Drop the database and recreate")
 var duration = flag.Duration("duration", 0, "The duration to run. If 0, run forever.")
+var expensive = flag.Bool("expensive", false, "Run expensive checks. (ignored unless -check is specified)")
 var interleave = flag.Bool("interleave", false, "Use interleaved data")
 var load = flag.Bool("load", false, "Generate fresh TPCC data. Use with -drop")
 var loadIndexes = flag.Bool("load-indexes", false, "Load indexes. Implied by load. Don't need to use this normally.")
@@ -85,8 +86,10 @@ func setupDatabase(parsedURL *url.URL, dbName string, nConns int) (*sql.DB, erro
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(nConns)
-	db.SetMaxIdleConns(nConns)
+	if !*check {
+		db.SetMaxOpenConns(nConns)
+		db.SetMaxIdleConns(nConns)
+	}
 
 	return db, nil
 }
@@ -193,8 +196,8 @@ func main() {
 	}
 
 	if *check {
-		if err := checkConsistency(db); err != nil {
-			fmt.Printf("check consistency failed: %v\n", err)
+		if err := checkConsistency(db); err != false {
+			fmt.Printf("check consistency failed\n")
 			os.Exit(1)
 		}
 		os.Exit(0)
