@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"math"
 )
 
 var ddls = [...]struct {
@@ -280,10 +281,20 @@ func splitTables(db *sql.DB, warehouses int) {
 		}
 	}
 
-	// Split item table every 1000 items.
+	// Split the item table every 1000 items.
 	const itemsPerRange = 1000
 	for i := itemsPerRange; i < nItems; i += itemsPerRange {
 		sql := fmt.Sprintf("ALTER TABLE item SPLIT AT VALUES (%d)", i)
+		if _, err := db.Exec(sql); err != nil {
+			panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
+		}
+	}
+
+	// Split the history table into 100 ranges.
+	const maxVal = math.MaxInt64
+	const valsPerRange int64 = maxVal / 100
+	for i := 1; i < 100; i++ {
+		sql := fmt.Sprintf("ALTER TABLE history SPLIT AT VALUES (%d)", int64(i)*valsPerRange)
 		if _, err := db.Exec(sql); err != nil {
 			panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
 		}

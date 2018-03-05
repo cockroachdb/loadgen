@@ -153,10 +153,31 @@ func partitionStock(db *sql.DB, wIDs []int, partitions int) {
 		panic(fmt.Sprintf("Couldn't exec %s: %s\n", buf.String(), err))
 	}
 
-	// TODO(peter): partition stock@stock_s_i_id_idx
+	// TODO(peter): remove duplication with partitionItem().
+	const nItems = 100000
+	iIDs := make([]int, partitions+1)
+	for i := 0; i < partitions; i++ {
+		iIDs[i] = i * (nItems / partitions)
+	}
+	iIDs[partitions] = nItems
+
+	buf.Reset()
+	buf.WriteString("ALTER INDEX stock@stock_s_i_id_idx PARTITION BY RANGE (s_i_id) (\n")
+	for i := 0; i < partitions; i++ {
+		fmt.Fprintf(&buf, "  PARTITION p1_%d VALUES FROM (%d) to (%d)", i, iIDs[i], iIDs[i+1])
+		if i+1 < partitions {
+			buf.WriteString(",")
+		}
+		buf.WriteString("\n")
+	}
+	buf.WriteString(")\n")
+	if _, err := db.Exec(buf.String()); err != nil {
+		panic(fmt.Sprintf("Couldn't exec %s: %s\n", buf.String(), err))
+	}
 
 	for i := 0; i < partitions; i++ {
 		configureZone(db, "stock", fmt.Sprintf("p%d", i), i)
+		configureZone(db, "stock", fmt.Sprintf("p1_%d", i), i)
 	}
 }
 
