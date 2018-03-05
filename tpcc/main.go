@@ -45,6 +45,7 @@ var noWait = flag.Bool("no-wait", false, "Run in no wait mode (no think/keying t
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just newOrders")
 var scatter = flag.Bool("scatter", false, "Scatter ranges")
 var split = flag.Bool("split", false, "Split tables")
+var partitions = flag.Int("partitions", 0, "Partition tables")
 var run = flag.Bool("run", true, "Run benchmark")
 var ramp = flag.Duration("ramp", 30*time.Second, "The duration over which to ramp up workers")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
@@ -181,6 +182,10 @@ func main() {
 
 	if *split {
 		splitTables(db, *warehouses)
+	}
+
+	if *partitions > 0 {
+		partitionTables(db, *warehouses, *partitions)
 	}
 
 	if *scatter {
