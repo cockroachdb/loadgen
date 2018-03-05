@@ -7,12 +7,21 @@ import (
 	"math"
 )
 
-func partitionWarehouse(db *sql.DB, wIDs []int) {
+func configureZone(db *sql.DB, table, partition string, constraint int) {
+	sql := fmt.Sprintf(
+		`ALTER PARTITION %s OF TABLE %s EXPERIMENTAL CONFIGURE ZONE 'constraints: [+rack=%d]'`,
+		partition, table, constraint)
+	if _, err := db.Exec(sql); err != nil {
+		panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
+	}
+}
+
+func partitionWarehouse(db *sql.DB, wIDs []int, partitions int) {
 	var buf bytes.Buffer
 	buf.WriteString("ALTER TABLE warehouse PARTITION BY RANGE (w_id) (\n")
-	for i, n := 0, len(wIDs)-1; i < n; i++ {
+	for i := 0; i < partitions; i++ {
 		fmt.Fprintf(&buf, "  PARTITION p%d VALUES FROM (%d) to (%d)", i, wIDs[i], wIDs[i+1])
-		if i+1 < n {
+		if i+1 < partitions {
 			buf.WriteString(",")
 		}
 		buf.WriteString("\n")
@@ -21,14 +30,18 @@ func partitionWarehouse(db *sql.DB, wIDs []int) {
 	if _, err := db.Exec(buf.String()); err != nil {
 		panic(fmt.Sprintf("Couldn't exec %s: %s\n", buf.String(), err))
 	}
+
+	for i := 0; i < partitions; i++ {
+		configureZone(db, "warehouse", fmt.Sprintf("p%d", i), i)
+	}
 }
 
-func partitionDistrict(db *sql.DB, wIDs []int) {
+func partitionDistrict(db *sql.DB, wIDs []int, partitions int) {
 	var buf bytes.Buffer
 	buf.WriteString("ALTER TABLE district PARTITION BY RANGE (d_w_id) (\n")
-	for i, n := 0, len(wIDs)-1; i < n; i++ {
+	for i := 0; i < partitions; i++ {
 		fmt.Fprintf(&buf, "  PARTITION p%d VALUES FROM (%d) to (%d)", i, wIDs[i], wIDs[i+1])
-		if i+1 < n {
+		if i+1 < partitions {
 			buf.WriteString(",")
 		}
 		buf.WriteString("\n")
@@ -37,14 +50,18 @@ func partitionDistrict(db *sql.DB, wIDs []int) {
 	if _, err := db.Exec(buf.String()); err != nil {
 		panic(fmt.Sprintf("Couldn't exec %s: %s\n", buf.String(), err))
 	}
+
+	for i := 0; i < partitions; i++ {
+		configureZone(db, "district", fmt.Sprintf("p%d", i), i)
+	}
 }
 
-func partitionNewOrder(db *sql.DB, wIDs []int) {
+func partitionNewOrder(db *sql.DB, wIDs []int, partitions int) {
 	var buf bytes.Buffer
 	buf.WriteString("ALTER TABLE new_order PARTITION BY RANGE (no_w_id) (\n")
-	for i, n := 0, len(wIDs)-1; i < n; i++ {
+	for i := 0; i < partitions; i++ {
 		fmt.Fprintf(&buf, "  PARTITION p%d VALUES FROM (%d) to (%d)", i, wIDs[i], wIDs[i+1])
-		if i+1 < n {
+		if i+1 < partitions {
 			buf.WriteString(",")
 		}
 		buf.WriteString("\n")
@@ -53,9 +70,13 @@ func partitionNewOrder(db *sql.DB, wIDs []int) {
 	if _, err := db.Exec(buf.String()); err != nil {
 		panic(fmt.Sprintf("Couldn't exec %s: %s\n", buf.String(), err))
 	}
+
+	for i := 0; i < partitions; i++ {
+		configureZone(db, "new_order", fmt.Sprintf("p%d", i), i)
+	}
 }
 
-func partitionOrder(db *sql.DB, wIDs []int) {
+func partitionOrder(db *sql.DB, wIDs []int, partitions int) {
 	targets := []string{
 		`TABLE "order"`,
 		`INDEX "order"@order_idx`,
@@ -65,9 +86,9 @@ func partitionOrder(db *sql.DB, wIDs []int) {
 	for j, target := range targets {
 		var buf bytes.Buffer
 		fmt.Fprintf(&buf, "ALTER %s PARTITION BY RANGE (o_w_id) (\n", target)
-		for i, n := 0, len(wIDs)-1; i < n; i++ {
+		for i := 0; i < partitions; i++ {
 			fmt.Fprintf(&buf, "  PARTITION p%d_%d VALUES FROM (%d) to (%d)", j, i, wIDs[i], wIDs[i+1])
-			if i+1 < n {
+			if i+1 < partitions {
 				buf.WriteString(",")
 			}
 			buf.WriteString("\n")
@@ -77,9 +98,15 @@ func partitionOrder(db *sql.DB, wIDs []int) {
 			panic(fmt.Sprintf("Couldn't exec %s: %s\n", buf.String(), err))
 		}
 	}
+
+	for i := 0; i < partitions; i++ {
+		for j := range targets {
+			configureZone(db, `"order"`, fmt.Sprintf("p%d_%d", j, i), i)
+		}
+	}
 }
 
-func partitionOrderLine(db *sql.DB, wIDs []int) {
+func partitionOrderLine(db *sql.DB, wIDs []int, partitions int) {
 	data := []struct {
 		target string
 		column string
@@ -91,9 +118,9 @@ func partitionOrderLine(db *sql.DB, wIDs []int) {
 	for j, d := range data {
 		var buf bytes.Buffer
 		fmt.Fprintf(&buf, "ALTER %s PARTITION BY RANGE (%s) (\n", d.target, d.column)
-		for i, n := 0, len(wIDs)-1; i < n; i++ {
+		for i := 0; i < partitions; i++ {
 			fmt.Fprintf(&buf, "  PARTITION p%d_%d VALUES FROM (%d) to (%d)", j, i, wIDs[i], wIDs[i+1])
-			if i+1 < n {
+			if i+1 < partitions {
 				buf.WriteString(",")
 			}
 			buf.WriteString("\n")
@@ -103,14 +130,20 @@ func partitionOrderLine(db *sql.DB, wIDs []int) {
 			panic(fmt.Sprintf("Couldn't exec %s: %s\n", buf.String(), err))
 		}
 	}
+
+	for i := 0; i < partitions; i++ {
+		for j := range data {
+			configureZone(db, `order_line`, fmt.Sprintf("p%d_%d", j, i), i)
+		}
+	}
 }
 
-func partitionStock(db *sql.DB, wIDs []int) {
+func partitionStock(db *sql.DB, wIDs []int, partitions int) {
 	var buf bytes.Buffer
 	buf.WriteString("ALTER TABLE stock PARTITION BY RANGE (s_w_id) (\n")
-	for i, n := 0, len(wIDs)-1; i < n; i++ {
+	for i := 0; i < partitions; i++ {
 		fmt.Fprintf(&buf, "  PARTITION p%d VALUES FROM (%d) to (%d)", i, wIDs[i], wIDs[i+1])
-		if i+1 < n {
+		if i+1 < partitions {
 			buf.WriteString(",")
 		}
 		buf.WriteString("\n")
@@ -121,9 +154,13 @@ func partitionStock(db *sql.DB, wIDs []int) {
 	}
 
 	// TODO(peter): partition stock@stock_s_i_id_idx
+
+	for i := 0; i < partitions; i++ {
+		configureZone(db, "stock", fmt.Sprintf("p%d", i), i)
+	}
 }
 
-func partitionCustomer(db *sql.DB, wIDs []int) {
+func partitionCustomer(db *sql.DB, wIDs []int, partitions int) {
 	targets := []string{
 		`TABLE customer`,
 		`INDEX customer@customer_idx`,
@@ -132,9 +169,9 @@ func partitionCustomer(db *sql.DB, wIDs []int) {
 	for j, target := range targets {
 		var buf bytes.Buffer
 		fmt.Fprintf(&buf, "ALTER %s PARTITION BY RANGE (c_w_id) (\n", target)
-		for i, n := 0, len(wIDs)-1; i < n; i++ {
+		for i := 0; i < partitions; i++ {
 			fmt.Fprintf(&buf, "  PARTITION p%d_%d VALUES FROM (%d) to (%d)", j, i, wIDs[i], wIDs[i+1])
-			if i+1 < n {
+			if i+1 < partitions {
 				buf.WriteString(",")
 			}
 			buf.WriteString("\n")
@@ -142,6 +179,12 @@ func partitionCustomer(db *sql.DB, wIDs []int) {
 		buf.WriteString(")\n")
 		if _, err := db.Exec(buf.String()); err != nil {
 			panic(fmt.Sprintf("Couldn't exec %s: %s\n", buf.String(), err))
+		}
+	}
+
+	for i := 0; i < partitions; i++ {
+		for j := range targets {
+			configureZone(db, `customer`, fmt.Sprintf("p%d_%d", j, i), i)
 		}
 	}
 }
@@ -158,9 +201,9 @@ func partitionHistory(db *sql.DB, wIDs []int, partitions int) {
 
 	var buf bytes.Buffer
 	buf.WriteString("ALTER TABLE history PARTITION BY RANGE (rowid) (\n")
-	for i, n := 0, len(rowids)-1; i < n; i++ {
+	for i := 0; i < partitions; i++ {
 		fmt.Fprintf(&buf, "  PARTITION p%d VALUES FROM (%d) to (%d)", i, rowids[i], rowids[i+1])
-		if i+1 < n {
+		if i+1 < partitions {
 			buf.WriteString(",")
 		}
 		buf.WriteString("\n")
@@ -181,9 +224,9 @@ func partitionHistory(db *sql.DB, wIDs []int, partitions int) {
 	for j, d := range data {
 		var buf bytes.Buffer
 		fmt.Fprintf(&buf, "ALTER %s PARTITION BY RANGE (%s) (\n", d.target, d.column)
-		for i, n := 0, len(wIDs)-1; i < n; i++ {
+		for i := 0; i < partitions; i++ {
 			fmt.Fprintf(&buf, "  PARTITION p%d_%d VALUES FROM (%d) to (%d)", j, i, wIDs[i], wIDs[i+1])
-			if i+1 < n {
+			if i+1 < partitions {
 				buf.WriteString(",")
 			}
 			buf.WriteString("\n")
@@ -191,6 +234,13 @@ func partitionHistory(db *sql.DB, wIDs []int, partitions int) {
 		buf.WriteString(")\n")
 		if _, err := db.Exec(buf.String()); err != nil {
 			panic(fmt.Sprintf("Couldn't exec %s: %s\n", buf.String(), err))
+		}
+	}
+
+	for i := 0; i < partitions; i++ {
+		configureZone(db, `history`, fmt.Sprintf("p%d", i), i)
+		for j := range data {
+			configureZone(db, `history`, fmt.Sprintf("p%d_%d", j, i), i)
 		}
 	}
 }
@@ -205,9 +255,9 @@ func partitionItem(db *sql.DB, partitions int) {
 
 	var buf bytes.Buffer
 	buf.WriteString("ALTER TABLE item PARTITION BY RANGE (i_id) (\n")
-	for i, n := 0, len(iIDs)-1; i < n; i++ {
+	for i := 0; i < partitions; i++ {
 		fmt.Fprintf(&buf, "  PARTITION p%d VALUES FROM (%d) to (%d)", i, iIDs[i], iIDs[i+1])
-		if i+1 < n {
+		if i+1 < partitions {
 			buf.WriteString(",")
 		}
 		buf.WriteString("\n")
@@ -215,6 +265,10 @@ func partitionItem(db *sql.DB, partitions int) {
 	buf.WriteString(")\n")
 	if _, err := db.Exec(buf.String()); err != nil {
 		panic(fmt.Sprintf("Couldn't exec %s: %s\n", buf.String(), err))
+	}
+
+	for i := 0; i < partitions; i++ {
+		configureZone(db, "item", fmt.Sprintf("p%d", i), i)
 	}
 }
 
@@ -225,13 +279,13 @@ func partitionTables(db *sql.DB, warehouses, partitions int) {
 	}
 	wIDs[partitions] = warehouses
 
-	partitionWarehouse(db, wIDs)
-	partitionDistrict(db, wIDs)
-	partitionNewOrder(db, wIDs)
-	partitionOrder(db, wIDs)
-	partitionOrderLine(db, wIDs)
-	partitionStock(db, wIDs)
-	partitionCustomer(db, wIDs)
+	partitionWarehouse(db, wIDs, partitions)
+	partitionDistrict(db, wIDs, partitions)
+	partitionNewOrder(db, wIDs, partitions)
+	partitionOrder(db, wIDs, partitions)
+	partitionOrderLine(db, wIDs, partitions)
+	partitionStock(db, wIDs, partitions)
+	partitionCustomer(db, wIDs, partitions)
 	partitionHistory(db, wIDs, partitions)
 	partitionItem(db, partitions)
 }
