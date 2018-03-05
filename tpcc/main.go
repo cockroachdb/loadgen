@@ -193,8 +193,8 @@ func main() {
 	}
 
 	if *check {
-		if err := checkConsistency(db); err != nil {
-			fmt.Printf("check consistency failed: %v\n", err)
+		if err := checkConsistency(db); err != false {
+			fmt.Printf("check consistency failed\n")
 			os.Exit(1)
 		}
 		os.Exit(0)
