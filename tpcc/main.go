@@ -46,7 +46,7 @@ var noWait = flag.Bool("no-wait", false, "Run in no wait mode (no think/keying t
 var opsStats = flag.Bool("ops-stats", false, "Print stats for all operations, not just newOrders")
 var scatter = flag.Bool("scatter", false, "Scatter ranges")
 var split = flag.Bool("split", false, "Split tables")
-var partitions = flag.Int("partitions", 0, "Partition tables")
+var partitions = flag.Int("partitions", 0, "Partition tables (requires -split)")
 var run = flag.Bool("run", true, "Run benchmark")
 var ramp = flag.Duration("ramp", 30*time.Second, "The duration over which to ramp up workers")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
@@ -185,10 +185,10 @@ func main() {
 
 	if *split {
 		splitTables(db, *warehouses)
-	}
 
-	if *partitions > 0 {
-		partitionTables(db, *warehouses, *partitions)
+		if *partitions > 0 {
+			partitionTables(db, *warehouses, *partitions)
+		}
 	}
 
 	if *scatter {
@@ -209,16 +209,38 @@ func main() {
 
 	initializeMix()
 
+	// If no partitions were specified, pretend there is a single partition
+	// containing all warehouses.
+	if *partitions == 0 {
+		*partitions = 1
+	}
+	// Assign each DB connection pool to a partition. This assumes that dbs[i] is
+	// a machine that holds partition "i % *partitions".
+	partitionDBs := make([][]*sql.DB, *partitions)
+	for i, db := range dbs {
+		p := i % *partitions
+		partitionDBs[p] = append(partitionDBs[p], db)
+	}
+	for i := range partitionDBs {
+		if partitionDBs[i] == nil {
+			partitionDBs[i] = dbs
+		}
+	}
+
 	start := time.Now()
 	errCh := make(chan error)
 	var wg sync.WaitGroup
 	for i := range workers {
 		w := i % *warehouses
+		// NB: Each partition contains "*warehouses / *partitions" warehouses. See
+		// partitionTables().
+		p := (w * *partitions) / *warehouses
+		dbs := partitionDBs[p]
 		workers[i] = newWorker(i, w, dbs[w%len(dbs)], &wg)
 	}
 
 	go func() {
-		// Starter the workers evenly spaced over 30s to avoid any thundering
+		// Start the workers evenly spaced over 30s to avoid any thundering
 		// behavior.
 		sleepTime := *ramp / time.Duration(len(workers))
 		for i := range workers {
