@@ -138,11 +138,14 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 
 	d.oEntryD = time.Now()
 
+	var retryCount int
 	err := crdb.ExecuteTx(
 		context.Background(),
 		db,
 		txOpts,
 		func(tx *sql.Tx) error {
+			retryCount++
+
 			// Select the district tax rate and next available order number, bumping it.
 			var dNextOID int
 			if err := tx.QueryRow(fmt.Sprintf(`
@@ -227,15 +230,15 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 				stockIDs[i] = fmt.Sprintf("(%d, %d)", item.olIID, item.olSupplyWID)
 			}
 			rows, err = tx.Query(fmt.Sprintf(`
-				SELECT s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[1]d
+				SELECT s_i_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[1]d
 				FROM stock
-				WHERE (s_i_id, s_w_id) IN (%[2]s)
-				ORDER BY s_i_id`,
+				WHERE (s_i_id, s_w_id) IN (%[2]s)`,
 				d.dID, strings.Join(stockIDs, ", ")),
 			)
 			if err != nil {
 				return err
 			}
+			ids := make([]string, d.oOlCnt)
 			distInfos := make([]string, d.oOlCnt)
 			sQuantityUpdateCases := make([]string, d.oOlCnt)
 			sYtdUpdateCases := make([]string, d.oOlCnt)
@@ -245,12 +248,17 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 				item := &d.items[i]
 
 				if !rows.Next() {
+					fmt.Printf(`%d: missing stock row: retry=%d %s
+SELECT s_i_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[4]d
+FROM stock
+WHERE (s_i_id, s_w_id) IN (%[5]s)
+`, i, retryCount-1, ids, d.dID, strings.Join(stockIDs, ", "))
 					return errors.New("missing stock row")
 				}
 
 				var sQuantity, sYtd, sOrderCnt, sRemoteCnt int
-				var sData string
-				err = rows.Scan(&sQuantity, &sYtd, &sOrderCnt, &sRemoteCnt, &sData, &distInfos[i])
+				var sData, sDistInfo, sID string
+				err = rows.Scan(&sID, &sQuantity, &sYtd, &sOrderCnt, &sRemoteCnt, &sData, &sDistInfo)
 				if err != nil {
 					rows.Close()
 					return err
@@ -272,10 +280,25 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 					newSRemoteCnt++
 				}
 
-				sQuantityUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], newSQuantity)
-				sYtdUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], sYtd+item.olQuantity)
-				sOrderCntUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], sOrderCnt+1)
-				sRemoteCntUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], newSRemoteCnt)
+				var j int
+				for ; j < len(itemIDs); j++ {
+					if itemIDs[j] == sID {
+						break
+					}
+				}
+				if j == len(itemIDs) {
+					return errors.New("unexpected stock row")
+				}
+				if ids[j] != "" {
+					return errors.New("repeated stock row")
+				}
+
+				ids[j] = sID
+				distInfos[j] = sDistInfo
+				sQuantityUpdateCases[j] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[j], newSQuantity)
+				sYtdUpdateCases[j] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[j], sYtd+item.olQuantity)
+				sOrderCntUpdateCases[j] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[j], sOrderCnt+1)
+				sRemoteCntUpdateCases[j] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[j], newSRemoteCnt)
 			}
 			if rows.Next() {
 				return errors.New("extra stock row")
