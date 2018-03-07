@@ -226,8 +226,21 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			for i, item := range d.items {
 				stockIDs[i] = fmt.Sprintf("(%d, %d)", item.olIID, item.olSupplyWID)
 			}
+			// var tracing string
+			// if err := tx.QueryRow(`show tracing`).Scan(&tracing); err != nil {
+			// 	return err
+			// }
+			// if tracing != "off" {
+			// 	if _, err := tx.Exec(`set tracing=off; set tracing=on;`); err != nil {
+			// 		return err
+			// 	}
+			// } else {
+			// 	if _, err := tx.Exec(`set tracing=on`); err != nil {
+			// 		return err
+			// 	}
+			// }
 			rows, err = tx.Query(fmt.Sprintf(`
-				SELECT s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[1]d
+				SELECT s_i_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[1]d
 				FROM stock
 				WHERE (s_i_id, s_w_id) IN (%[2]s)
 				ORDER BY s_i_id`,
@@ -236,25 +249,58 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			if err != nil {
 				return err
 			}
+			ids := make([]string, d.oOlCnt)
 			distInfos := make([]string, d.oOlCnt)
 			sQuantityUpdateCases := make([]string, d.oOlCnt)
 			sYtdUpdateCases := make([]string, d.oOlCnt)
 			sOrderCntUpdateCases := make([]string, d.oOlCnt)
 			sRemoteCntUpdateCases := make([]string, d.oOlCnt)
-			for i := range d.items {
-				item := &d.items[i]
-
+			for k := range d.items {
 				if !rows.Next() {
+					fmt.Printf(`%d: missing stock row: [%s]
+SELECT s_i_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[3]d
+FROM stock
+WHERE (s_i_id, s_w_id) IN (%[4]s)
+ORDER BY s_i_id
+`, k, strings.Join(ids, ","), d.dID, strings.Join(stockIDs, ", "))
+
+					rows.Close()
+					// rows, err := tx.Query("select message,operation,span from [show trace for session]")
+					// if err != nil {
+					// 	return err
+					// }
+					// fmt.Printf("trace:\n")
+					// for rows.Next() {
+					// 	var msg, op, span string
+					// 	if err := rows.Scan(&msg, &op, &span); err != nil {
+					// 		return err
+					// 	}
+					// 	fmt.Printf("| %-140s|\t\t\t%s\t%s\n", msg, op, span)
+					// }
 					return errors.New("missing stock row")
 				}
 
 				var sQuantity, sYtd, sOrderCnt, sRemoteCnt int
-				var sData string
-				err = rows.Scan(&sQuantity, &sYtd, &sOrderCnt, &sRemoteCnt, &sData, &distInfos[i])
+				var sData, sDistInfo, sID string
+				err = rows.Scan(&sID, &sQuantity, &sYtd, &sOrderCnt, &sRemoteCnt, &sData, &sDistInfo)
 				if err != nil {
 					rows.Close()
 					return err
 				}
+
+				var i int
+				for ; i < len(itemIDs); i++ {
+					if itemIDs[i] == sID {
+						break
+					}
+				}
+				if i == len(itemIDs) {
+					return errors.New("unexpected stock row")
+				}
+				if ids[i] != "" {
+					return errors.New("repeated stock row")
+				}
+				item := &d.items[i]
 
 				if strings.Contains(sData, originalString) && strings.Contains(iDatas[i], originalString) {
 					item.brandGeneric = "B"
@@ -272,6 +318,8 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 					newSRemoteCnt++
 				}
 
+				ids[i] = sID
+				distInfos[i] = sDistInfo
 				sQuantityUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], newSQuantity)
 				sYtdUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], sYtd+item.olQuantity)
 				sOrderCntUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], sOrderCnt+1)
@@ -284,6 +332,9 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 				return err
 			}
 			rows.Close()
+			// if _, err := tx.Exec(`set tracing=off`); err != nil {
+			// 	return err
+			// }
 
 			// Insert row into the orders and new orders table.
 			if _, err := tx.Exec(fmt.Sprintf(`
