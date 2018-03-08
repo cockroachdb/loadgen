@@ -73,8 +73,6 @@ type newOrderData struct {
 	items []orderItem
 }
 
-var errSimulated = errors.New("simulated user error")
-
 type newOrder struct{}
 
 var _ tpccTx = newOrder{}
@@ -84,7 +82,7 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 		wID:    wID,
 		dID:    randInt(1, 10),
 		cID:    randCustomerID(),
-		oOlCnt: 6,
+		oOlCnt: 2,
 	}
 	d.items = make([]orderItem, d.oOlCnt)
 
@@ -238,8 +236,5 @@ ORDER BY s_i_id
 
 			return nil
 		})
-	if err == errSimulated {
-		return d, nil
-	}
 	return d, err
 }
