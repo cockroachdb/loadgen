@@ -128,14 +128,10 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 		db,
 		txOpts,
 		func(tx *sql.Tx) error {
-			// 2.4.2.2: For each o_ol_cnt item in the order, query the relevant item
-			// row, update the stock row to account for the order, and insert a new
-			// line into the order_line table to reflect the item on the order.
 			itemIDs := make([]string, d.oOlCnt)
 			for i, item := range d.items {
 				itemIDs[i] = fmt.Sprint(item.olIID)
 			}
-
 			stockIDs := make([]string, d.oOlCnt)
 			for i, item := range d.items {
 				stockIDs[i] = fmt.Sprintf("(%d, %d)", item.olIID, item.olSupplyWID)
@@ -151,11 +147,6 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 				return err
 			}
 			ids := make([]string, d.oOlCnt)
-			distInfos := make([]string, d.oOlCnt)
-			sQuantityUpdateCases := make([]string, d.oOlCnt)
-			sYtdUpdateCases := make([]string, d.oOlCnt)
-			sOrderCntUpdateCases := make([]string, d.oOlCnt)
-			sRemoteCntUpdateCases := make([]string, d.oOlCnt)
 			for k := range d.items {
 				if !rows.Next() {
 					fmt.Printf(`%d: missing stock row: [%s]
@@ -189,24 +180,7 @@ ORDER BY s_i_id
 				if ids[i] != "" {
 					return errors.New("repeated stock row")
 				}
-				item := &d.items[i]
-
-				newSQuantity := sQuantity - item.olQuantity
-				if sQuantity < item.olQuantity+10 {
-					newSQuantity += 91
-				}
-
-				newSRemoteCnt := sRemoteCnt
-				if item.remoteWarehouse {
-					newSRemoteCnt++
-				}
-
 				ids[i] = sID
-				distInfos[i] = sDistInfo
-				sQuantityUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], newSQuantity)
-				sYtdUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], sYtd+item.olQuantity)
-				sOrderCntUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], sOrderCnt+1)
-				sRemoteCntUpdateCases[i] = fmt.Sprintf("WHEN %s THEN %d", stockIDs[i], newSRemoteCnt)
 			}
 			if rows.Next() {
 				return errors.New("extra stock row")
@@ -220,15 +194,8 @@ ORDER BY s_i_id
 			if _, err := tx.Exec(fmt.Sprintf(`
 				UPDATE stock
 				SET
-					s_quantity = CASE (s_i_id, s_w_id) %[1]s ELSE crdb_internal.force_error('', 'unknown case') END,
-					s_ytd = CASE (s_i_id, s_w_id) %[2]s END,
-					s_order_cnt = CASE (s_i_id, s_w_id) %[3]s END,
-					s_remote_cnt = CASE (s_i_id, s_w_id) %[4]s END
-				WHERE (s_i_id, s_w_id) IN (%[5]s)`,
-				strings.Join(sQuantityUpdateCases, " "),
-				strings.Join(sYtdUpdateCases, " "),
-				strings.Join(sOrderCntUpdateCases, " "),
-				strings.Join(sRemoteCntUpdateCases, " "),
+					s_quantity = s_quantity * 1
+				WHERE (s_i_id, s_w_id) IN (%[1]s)`,
 				strings.Join(stockIDs, ", ")),
 			); err != nil {
 				return err
