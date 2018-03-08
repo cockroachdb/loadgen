@@ -226,19 +226,6 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			for i, item := range d.items {
 				stockIDs[i] = fmt.Sprintf("(%d, %d)", item.olIID, item.olSupplyWID)
 			}
-			// var tracing string
-			// if err := tx.QueryRow(`show tracing`).Scan(&tracing); err != nil {
-			// 	return err
-			// }
-			// if tracing != "off" {
-			// 	if _, err := tx.Exec(`set tracing=off; set tracing=on;`); err != nil {
-			// 		return err
-			// 	}
-			// } else {
-			// 	if _, err := tx.Exec(`set tracing=on`); err != nil {
-			// 		return err
-			// 	}
-			// }
 			rows, err = tx.Query(fmt.Sprintf(`
 				SELECT s_i_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[1]d
 				FROM stock
@@ -265,18 +252,6 @@ ORDER BY s_i_id
 `, k, strings.Join(ids, ","), d.dID, strings.Join(stockIDs, ", "))
 
 					rows.Close()
-					// rows, err := tx.Query("select message,operation,span from [show trace for session]")
-					// if err != nil {
-					// 	return err
-					// }
-					// fmt.Printf("trace:\n")
-					// for rows.Next() {
-					// 	var msg, op, span string
-					// 	if err := rows.Scan(&msg, &op, &span); err != nil {
-					// 		return err
-					// 	}
-					// 	fmt.Printf("| %-140s|\t\t\t%s\t%s\n", msg, op, span)
-					// }
 					return errors.New("missing stock row")
 				}
 
@@ -332,9 +307,6 @@ ORDER BY s_i_id
 				return err
 			}
 			rows.Close()
-			// if _, err := tx.Exec(`set tracing=off`); err != nil {
-			// 	return err
-			// }
 
 			// Insert row into the orders and new orders table.
 			if _, err := tx.Exec(fmt.Sprintf(`
