@@ -144,19 +144,6 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 		db,
 		txOpts,
 		func(tx *sql.Tx) error {
-			// Select the district tax rate and next available order number, bumping it.
-			var dNextOID int
-			if err := tx.QueryRow(fmt.Sprintf(`
-				UPDATE district
-				SET d_next_o_id = d_next_o_id + 1
-				WHERE d_w_id = %[1]d AND d_id = %[2]d
-				RETURNING d_tax, d_next_o_id`,
-				d.wID, d.dID),
-			).Scan(&d.dTax, &dNextOID); err != nil {
-				return err
-			}
-			d.oID = dNextOID - 1
-
 			// 2.4.2.2: For each o_ol_cnt item in the order, query the relevant item
 			// row, update the stock row to account for the order, and insert a new
 			// line into the order_line table to reflect the item on the order.
