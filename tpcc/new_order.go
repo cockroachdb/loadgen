@@ -137,8 +137,8 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 				stockIDs[i] = fmt.Sprintf("(%d, %d)", item.olIID, item.olSupplyWID)
 			}
 			rows, err := tx.Query(fmt.Sprintf(`
-				SELECT s_i_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[1]d
-				FROM stock
+				SELECT s_i_id
+				FROM stock@primary
 				WHERE (s_i_id, s_w_id) IN (%[2]s)
 				ORDER BY s_i_id`,
 				d.dID, strings.Join(stockIDs, ", ")),
@@ -150,8 +150,8 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			for k := range d.items {
 				if !rows.Next() {
 					fmt.Printf(`%d: missing stock row: [%s]
-SELECT s_i_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[3]d
-FROM stock
+SELECT s_i_id
+FROM stock@primary
 WHERE (s_i_id, s_w_id) IN (%[4]s)
 ORDER BY s_i_id
 `, k, strings.Join(ids, ","), d.dID, strings.Join(stockIDs, ", "))
@@ -160,9 +160,8 @@ ORDER BY s_i_id
 					return errors.New("missing stock row")
 				}
 
-				var sQuantity, sYtd, sOrderCnt, sRemoteCnt int
-				var sData, sDistInfo, sID string
-				err = rows.Scan(&sID, &sQuantity, &sYtd, &sOrderCnt, &sRemoteCnt, &sData, &sDistInfo)
+				var sID string
+				err = rows.Scan(&sID)
 				if err != nil {
 					rows.Close()
 					return err
