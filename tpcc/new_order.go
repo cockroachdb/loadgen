@@ -156,24 +156,6 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			}
 			d.oID = dNextOID - 1
 
-			// Select the warehouse tax rate.
-			if err := tx.QueryRow(fmt.Sprintf(`
-				SELECT w_tax FROM warehouse WHERE w_id = %[1]d`,
-				wID),
-			).Scan(&d.wTax); err != nil {
-				return err
-			}
-
-			// Select the customer's discount, last name and credit.
-			if err := tx.QueryRow(fmt.Sprintf(`
-				SELECT c_discount, c_last, c_credit
-				FROM customer
-				WHERE c_w_id = %[1]d AND c_d_id = %[2]d AND c_id = %[3]d`,
-				d.wID, d.dID, d.cID),
-			).Scan(&d.cDiscount, &d.cLast, &d.cCredit); err != nil {
-				return err
-			}
-
 			// 2.4.2.2: For each o_ol_cnt item in the order, query the relevant item
 			// row, update the stock row to account for the order, and insert a new
 			// line into the order_line table to reflect the item on the order.
