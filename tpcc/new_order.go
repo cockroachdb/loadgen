@@ -290,22 +290,6 @@ ORDER BY s_i_id
 			}
 			rows.Close()
 
-			// Insert row into the orders and new orders table.
-			if _, err := tx.Exec(fmt.Sprintf(`
-				INSERT INTO "order" (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local)
-				VALUES (%[1]d, %[2]d, %[3]d, %[4]d, '%[5]s', %[6]d, %[7]d)`,
-				d.oID, d.dID, d.wID, d.cID, d.oEntryD.Format("2006-01-02 15:04:05"),
-				d.oOlCnt, allLocal),
-			); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(fmt.Sprintf(`
-				INSERT INTO new_order (no_o_id, no_d_id, no_w_id) 
-				VALUES (%[1]d, %[2]d, %[3]d)`,
-				d.oID, d.dID, d.wID)); err != nil {
-				return err
-			}
-
 			// Update the stock table for each item.
 			if _, err := tx.Exec(fmt.Sprintf(`
 				UPDATE stock
