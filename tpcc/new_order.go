@@ -107,7 +107,7 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			}
 		}
 		// 2.4.1.5.2: 1% of the time, an item is supplied from a remote warehouse.
-		item.remoteWarehouse = rand.Intn(100) < 50
+		item.remoteWarehouse = (i % 2) == 0
 		if item.remoteWarehouse {
 			item.olSupplyWID = rand.Intn(*warehouses)
 		} else {
