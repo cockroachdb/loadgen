@@ -130,6 +130,7 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 		}
 		d.items[i] = item
 	}
+	_ = allLocal
 
 	// Sort the items in the same order that we will require from batch select queries.
 	sort.Slice(d.items, func(i, j int) bool {
@@ -163,52 +164,12 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			for i, item := range d.items {
 				itemIDs[i] = fmt.Sprint(item.olIID)
 			}
-			rows, err := tx.Query(fmt.Sprintf(`
-				SELECT i_price, i_name, i_data
-				FROM item
-				WHERE i_id IN (%[1]s)
-				ORDER BY i_id`,
-				strings.Join(itemIDs, ", ")),
-			)
-			if err != nil {
-				return err
-			}
-			iDatas := make([]string, d.oOlCnt)
-			for i := range d.items {
-				item := &d.items[i]
-				iData := &iDatas[i]
-
-				if !rows.Next() {
-					if rollback {
-						// 2.4.2.3: roll back when we're expecting a rollback due to
-						// simulated user error (invalid item id) and we actually
-						// can't find the item. The spec requires us to actually go
-						// to the database for this, even though we know earlier
-						// that the item has an invalid number.
-						return errSimulated
-					}
-					return errors.New("missing item row")
-				}
-
-				err = rows.Scan(&item.iPrice, &item.iName, iData)
-				if err != nil {
-					rows.Close()
-					return err
-				}
-			}
-			if rows.Next() {
-				return errors.New("extra item row")
-			}
-			if err := rows.Err(); err != nil {
-				return err
-			}
-			rows.Close()
 
 			stockIDs := make([]string, d.oOlCnt)
 			for i, item := range d.items {
 				stockIDs[i] = fmt.Sprintf("(%d, %d)", item.olIID, item.olSupplyWID)
 			}
-			rows, err = tx.Query(fmt.Sprintf(`
+			rows, err := tx.Query(fmt.Sprintf(`
 				SELECT s_i_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[1]d
 				FROM stock
 				WHERE (s_i_id, s_w_id) IN (%[2]s)
@@ -226,6 +187,9 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			sRemoteCntUpdateCases := make([]string, d.oOlCnt)
 			for k := range d.items {
 				if !rows.Next() {
+					if rollback && k == len(d.items)-1 {
+						return errSimulated
+					}
 					fmt.Printf(`%d: missing stock row: [%s]
 SELECT s_i_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[3]d
 FROM stock
@@ -258,12 +222,6 @@ ORDER BY s_i_id
 					return errors.New("repeated stock row")
 				}
 				item := &d.items[i]
-
-				if strings.Contains(sData, originalString) && strings.Contains(iDatas[i], originalString) {
-					item.brandGeneric = "B"
-				} else {
-					item.brandGeneric = "G"
-				}
 
 				newSQuantity := sQuantity - item.olQuantity
 				if sQuantity < item.olQuantity+10 {
@@ -307,36 +265,6 @@ ORDER BY s_i_id
 			); err != nil {
 				return err
 			}
-
-			// // Insert a new order line for each item in the order.
-			// olValsStrings := make([]string, d.oOlCnt)
-			// for i := range d.items {
-			// 	item := &d.items[i]
-			// 	item.olAmount = float64(item.olQuantity) * item.iPrice
-			// 	d.totalAmount += item.olAmount
-
-			// 	olValsStrings[i] = fmt.Sprintf("(%d,%d,%d,%d,%d,%d,%d,%f,'%s')",
-			// 		d.oID,            // ol_o_id
-			// 		d.dID,            // ol_d_id
-			// 		d.wID,            // ol_w_id
-			// 		item.olNumber,    // ol_number
-			// 		item.olIID,       // ol_i_id
-			// 		item.olSupplyWID, // ol_supply_w_id
-			// 		item.olQuantity,  // ol_quantity
-			// 		item.olAmount,    // ol_amount
-			// 		distInfos[i],     // ol_dist_info
-			// 	)
-			// }
-			// if _, err := tx.Exec(fmt.Sprintf(`
-			// 	INSERT INTO order_line(ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_dist_info)
-			// 	VALUES %s`,
-			// 	strings.Join(olValsStrings, ", ")),
-			// ); err != nil {
-			// 	return err
-			// }
-
-			// // 2.4.2.2: total_amount = sum(OL_AMOUNT) * (1 - C_DISCOUNT) * (1 + W_TAX + D_TAX)
-			// d.totalAmount *= (1 - d.cDiscount) * (1 + d.wTax + d.dTax)
 
 			return nil
 		})
