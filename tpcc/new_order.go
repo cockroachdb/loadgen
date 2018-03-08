@@ -308,35 +308,35 @@ ORDER BY s_i_id
 				return err
 			}
 
-			// Insert a new order line for each item in the order.
-			olValsStrings := make([]string, d.oOlCnt)
-			for i := range d.items {
-				item := &d.items[i]
-				item.olAmount = float64(item.olQuantity) * item.iPrice
-				d.totalAmount += item.olAmount
+			// // Insert a new order line for each item in the order.
+			// olValsStrings := make([]string, d.oOlCnt)
+			// for i := range d.items {
+			// 	item := &d.items[i]
+			// 	item.olAmount = float64(item.olQuantity) * item.iPrice
+			// 	d.totalAmount += item.olAmount
 
-				olValsStrings[i] = fmt.Sprintf("(%d,%d,%d,%d,%d,%d,%d,%f,'%s')",
-					d.oID,            // ol_o_id
-					d.dID,            // ol_d_id
-					d.wID,            // ol_w_id
-					item.olNumber,    // ol_number
-					item.olIID,       // ol_i_id
-					item.olSupplyWID, // ol_supply_w_id
-					item.olQuantity,  // ol_quantity
-					item.olAmount,    // ol_amount
-					distInfos[i],     // ol_dist_info
-				)
-			}
-			if _, err := tx.Exec(fmt.Sprintf(`
-				INSERT INTO order_line(ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_dist_info)
-				VALUES %s`,
-				strings.Join(olValsStrings, ", ")),
-			); err != nil {
-				return err
-			}
+			// 	olValsStrings[i] = fmt.Sprintf("(%d,%d,%d,%d,%d,%d,%d,%f,'%s')",
+			// 		d.oID,            // ol_o_id
+			// 		d.dID,            // ol_d_id
+			// 		d.wID,            // ol_w_id
+			// 		item.olNumber,    // ol_number
+			// 		item.olIID,       // ol_i_id
+			// 		item.olSupplyWID, // ol_supply_w_id
+			// 		item.olQuantity,  // ol_quantity
+			// 		item.olAmount,    // ol_amount
+			// 		distInfos[i],     // ol_dist_info
+			// 	)
+			// }
+			// if _, err := tx.Exec(fmt.Sprintf(`
+			// 	INSERT INTO order_line(ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_dist_info)
+			// 	VALUES %s`,
+			// 	strings.Join(olValsStrings, ", ")),
+			// ); err != nil {
+			// 	return err
+			// }
 
-			// 2.4.2.2: total_amount = sum(OL_AMOUNT) * (1 - C_DISCOUNT) * (1 + W_TAX + D_TAX)
-			d.totalAmount *= (1 - d.cDiscount) * (1 + d.wTax + d.dTax)
+			// // 2.4.2.2: total_amount = sum(OL_AMOUNT) * (1 - C_DISCOUNT) * (1 + W_TAX + D_TAX)
+			// d.totalAmount *= (1 - d.cDiscount) * (1 + d.wTax + d.dTax)
 
 			return nil
 		})
