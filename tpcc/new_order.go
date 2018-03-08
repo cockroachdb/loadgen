@@ -84,7 +84,7 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 		wID:    wID,
 		dID:    randInt(1, 10),
 		cID:    randCustomerID(),
-		oOlCnt: randInt(5, 15),
+		oOlCnt: 6,
 	}
 	d.items = make([]orderItem, d.oOlCnt)
 
@@ -93,44 +93,30 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 	// orderItem already tracks a quantity that can be larger than 1.
 	itemIDs := make(map[int]struct{})
 
-	// 2.4.1.4: A fixed 1% of the New-Order transactions are chosen at random to
-	// simulate user data entry errors and exercise the performance of rolling
-	// back update transactions.
-	rollback := rand.Intn(100) == 0
-
 	// allLocal tracks whether any of the items were from a remote warehouse.
-	allLocal := 1
 	for i := 0; i < d.oOlCnt; i++ {
 		item := orderItem{
 			olNumber: i + 1,
 			// 2.4.1.5.3: order has a quantity [1..10]
 			olQuantity: rand.Intn(10) + 1,
 		}
-		// 2.4.1.5.1 an order item has a random item number, unless rollback is true
-		// and it's the last item in the items list.
-		if rollback && i == d.oOlCnt-1 {
-			item.olIID = -1
-		} else {
-			// Loop until we find a unique item ID.
-			for {
-				item.olIID = randItemID()
-				if _, ok := itemIDs[item.olIID]; !ok {
-					itemIDs[item.olIID] = struct{}{}
-					break
-				}
+		// Loop until we find a unique item ID.
+		for {
+			item.olIID = randItemID()
+			if _, ok := itemIDs[item.olIID]; !ok {
+				itemIDs[item.olIID] = struct{}{}
+				break
 			}
 		}
 		// 2.4.1.5.2: 1% of the time, an item is supplied from a remote warehouse.
-		item.remoteWarehouse = rand.Intn(100) == 0
+		item.remoteWarehouse = rand.Intn(100) < 50
 		if item.remoteWarehouse {
-			allLocal = 0
 			item.olSupplyWID = rand.Intn(*warehouses)
 		} else {
 			item.olSupplyWID = wID
 		}
 		d.items[i] = item
 	}
-	_ = allLocal
 
 	// Sort the items in the same order that we will require from batch select queries.
 	sort.Slice(d.items, func(i, j int) bool {
@@ -174,9 +160,6 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 			sRemoteCntUpdateCases := make([]string, d.oOlCnt)
 			for k := range d.items {
 				if !rows.Next() {
-					if rollback && k == len(d.items)-1 {
-						return errSimulated
-					}
 					fmt.Printf(`%d: missing stock row: [%s]
 SELECT s_i_id, s_quantity, s_ytd, s_order_cnt, s_remote_cnt, s_data, s_dist_%02[3]d
 FROM stock
