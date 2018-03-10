@@ -268,8 +268,8 @@ func loadSchema(db *sql.DB, interleave bool, index bool, usePostgres bool) {
 // NB: Since we always split at the same points (specific warehouse IDs and
 // item IDs), splitting is idempotent.
 func splitTables(db *sql.DB, warehouses int) {
-	// Split district and warehouse tables every 100 warehouses.
-	const warehousesPerRange = 100
+	// Split district and warehouse tables every 10 warehouses.
+	const warehousesPerRange = 10
 	for i := warehousesPerRange; i < warehouses; i += warehousesPerRange {
 		sql := fmt.Sprintf("ALTER TABLE warehouse SPLIT AT VALUES (%d)", i)
 		if _, err := db.Exec(sql); err != nil {
@@ -281,8 +281,8 @@ func splitTables(db *sql.DB, warehouses int) {
 		}
 	}
 
-	// Split the item table every 1000 items.
-	const itemsPerRange = 1000
+	// Split the item table every 100 items.
+	const itemsPerRange = 100
 	for i := itemsPerRange; i < nItems; i += itemsPerRange {
 		sql := fmt.Sprintf("ALTER TABLE item SPLIT AT VALUES (%d)", i)
 		if _, err := db.Exec(sql); err != nil {
@@ -290,9 +290,9 @@ func splitTables(db *sql.DB, warehouses int) {
 		}
 	}
 
-	// Split the history table into 100 ranges.
+	// Split the history table into 1000 ranges.
 	const maxVal = math.MaxInt64
-	const valsPerRange int64 = maxVal / 100
+	const valsPerRange int64 = maxVal / 1000
 	for i := 1; i < 100; i++ {
 		sql := fmt.Sprintf("ALTER TABLE history SPLIT AT VALUES (%d)", int64(i)*valsPerRange)
 		if _, err := db.Exec(sql); err != nil {
