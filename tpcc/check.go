@@ -6,6 +6,10 @@ import (
 
 	"time"
 
+	"strings"
+
+	"strconv"
+
 	"github.com/pkg/errors"
 )
 
@@ -310,31 +314,51 @@ SELECT COUNT(*) FROM
 
 func checkConsistency(db *sql.DB) bool {
 	type check struct {
-		name      string
-		f         func(db *sql.DB) error
-		expensive bool
+		name string
+		f    func(db *sql.DB) error
 	}
 
 	checks := []check{
-		{"3.3.2.1 ", check3321, false},
-		{"3.3.2.2 ", check3322, false},
-		{"3.3.2.3 ", check3323, false},
-		{"3.3.2.4 ", check3324, false},
-		{"3.3.2.5 ", check3325, false},
-		{"3.3.2.6 ", check3326, true},
-		{"3.3.2.7 ", check3327, false},
-		{"3.3.2.8 ", check3327, false},
-		{"3.3.2.9 ", check3327, false},
+		{"3.3.2.1", check3321},
+		{"3.3.2.2", check3322},
+		{"3.3.2.3", check3323},
+		{"3.3.2.4", check3324},
+		{"3.3.2.5", check3325},
+		{"3.3.2.6", check3326},
+		{"3.3.2.7", check3327},
+		{"3.3.2.8", check3328},
+		{"3.3.2.9", check3329},
 	}
-	var errorEncountered bool
 
 	// TODO(arjun): We should run each test in a single transaction as currently
 	// we have to shut down load before running the checks.
 
-	for _, check := range checks {
-		if check.expensive && !*expensive {
-			continue
+	var checksToRun []int
+
+	if *userSpecifiedChecks == "" {
+		checksToRun = make([]int, len(checks))
+		for i := range checks {
+			checksToRun[i] = i
 		}
+	} else {
+		toRun := strings.Split(*userSpecifiedChecks, ",")
+		for _, checkToRun := range toRun {
+			i, err := strconv.Atoi(checkToRun)
+			if err != nil {
+				fmt.Printf("error parsing check %s: %v", checkToRun, err)
+				return true
+			}
+			if i > len(checks) {
+				fmt.Printf("each check must be between 1 and %d, encountered %d", len(checks), i)
+				return true
+			}
+			checksToRun = append(checksToRun, i-1)
+		}
+	}
+
+	var errorEncountered bool
+	for _, checkToRun := range checksToRun {
+		check := checks[checkToRun]
 		start := time.Now()
 		fmt.Printf(check.name)
 		if err := check.f(db); err != nil {
