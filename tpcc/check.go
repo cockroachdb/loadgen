@@ -95,32 +95,20 @@ SELECT MAX(o_id) FROM tpcc.order GROUP BY o_d_id, o_w_id ORDER BY o_w_id, o_d_id
 
 func check3323(db *sql.DB) error {
 	// max(NO_O_ID) - min(NO_O_ID) + 1 = # of rows in new_order for each warehouse/district
-	rows, err := db.Query(`
-SELECT (VALUES (1)) FULL OUTER JOIN
-(SELECT MAX(no_o_id) - MIN(no_o_id) - COUNT(*) AS nod FROM new_order GROUP BY no_w_id, no_d_id)
- WHERE nod != one
+	row := db.QueryRow(`
+SELECT COUNT(*) FROM
+ (SELECT MAX(no_o_id) - MIN(no_o_id) - COUNT(*) AS nod FROM new_order 
+  GROUP BY no_w_id, no_d_id)
+ WHERE nod != -1
 `)
-	if err != nil {
-		return err
-	}
 
 	var i int
-	var val int
-	for ; rows.Next(); i++ {
-		if err := rows.Scan(&val); err != nil {
-			return err
-		}
-		if val != -1 {
-			return errors.Errorf("MAX(no_o_id) - MIN(no_o_id) - COUNT(rows) must be -1, got %d", val)
-		}
-	}
-
-	if err := rows.Close(); err != nil {
+	if err := row.Scan(&i); err != nil {
 		return err
 	}
 
-	if i == 0 {
-		return errors.Errorf("zero rows")
+	if i != 0 {
+		return errors.Errorf("%d rows returned, expected zero", i)
 	}
 
 	return nil
