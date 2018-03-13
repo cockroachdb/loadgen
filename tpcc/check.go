@@ -191,6 +191,10 @@ EXCEPT ALL
 }
 
 func check3326(db *sql.DB) error {
+	// For any row in the ORDER table, O_OL_CNT must equal the number of rows
+	// in the ORDER-LINE table for the corresponding order defined by
+	// (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID).
+
 	firstQuery, err := db.Query(`
 (SELECT o_w_id, o_d_id, o_id, o_ol_cnt FROM tpcc.order 
   ORDER BY o_w_id, o_d_id, o_id DESC) 
@@ -225,6 +229,85 @@ EXCEPT ALL
 	return secondQuery.Close()
 }
 
+func check3327(db *sql.DB) error {
+	// For any row in the ORDER-LINE table, OL_DELIVERY_D is set to a null
+	// date/time if and only if the corresponding row in the ORDER table defined
+	// by (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID) has
+	// O_CARRIER_ID set to a null value.
+
+	row := db.QueryRow(`
+SELECT COUNT(*) FROM 
+  (SELECT o_w_id, o_d_id, o_id FROM "order" WHERE o_carrier_id IS NULL)
+FULL OUTER JOIN
+  (SELECT ol_w_id, ol_d_id, ol_o_id FROM order_line WHERE ol_delivery_d IS NULL)
+ON (ol_w_id = o_w_id AND ol_d_id = o_d_id AND ol_o_id = o_id)
+WHERE ol_o_id IS NULL OR o_id IS NULL
+`)
+
+	var i int
+	if err := row.Scan(&i); err != nil {
+		return err
+	}
+
+	if i != 0 {
+		return errors.Errorf("%d rows returned, expected zero", i)
+	}
+
+	return nil
+}
+
+func check3328(db *sql.DB) error {
+	// Entries in the WAREHOUSE and HISTORY tables must satisfy the relationship:
+	// W_YTD = SUM(H_AMOUNT) for each warehouse defined by (W_ID = H _W_ID).
+
+	row := db.QueryRow(`
+SELECT COUNT(*) FROM 
+  (SELECT w_id, w_ytd, sum FROM warehouse 
+  JOIN
+  (SELECT h_w_id, SUM(h_amount) FROM history GROUP BY h_w_id)
+  ON w_id = h_w_id 
+  WHERE w_ytd != sum
+  )
+`)
+
+	var i int
+	if err := row.Scan(&i); err != nil {
+		return err
+	}
+
+	if i != 0 {
+		return errors.Errorf("%d rows returned, expected zero", i)
+	}
+
+	return nil
+}
+
+func check3329(db *sql.DB) error {
+	// Entries in the DISTRICT and HISTORY tables must satisfy the relationship:
+	// D_YTD=SUM(H_AMOUNT) for each district defined by (D_W_ID,D_ID)=(H_W_ID,H_D_ID)
+
+	row := db.QueryRow(`
+SELECT COUNT(*) FROM 
+  (SELECT d_id, d_ytd, sum FROM district 
+  JOIN
+  (SELECT h_w_id, h_d_id, SUM(h_amount) FROM history GROUP BY (h_w_id, h_d_id))
+  ON d_id = h_d_id AND d_w_id = h_w_id
+  WHERE d_ytd != sum
+  )
+`)
+
+	var i int
+	if err := row.Scan(&i); err != nil {
+		return err
+	}
+
+	if i != 0 {
+		return errors.Errorf("%d rows returned, expected zero", i)
+	}
+
+	return nil
+}
+
 func checkConsistency(db *sql.DB) bool {
 	type check struct {
 		name      string
@@ -233,12 +316,15 @@ func checkConsistency(db *sql.DB) bool {
 	}
 
 	checks := []check{
-		{"3.3.2.1", check3321, false},
-		{"3.3.2.2", check3322, false},
-		{"3.3.2.3", check3323, false},
-		{"3.3.2.4", check3324, false},
-		{"3.3.2.5", check3325, false},
-		{"3.3.2.6", check3326, true},
+		{"3.3.2.1 ", check3321, false},
+		{"3.3.2.2 ", check3322, false},
+		{"3.3.2.3 ", check3323, false},
+		{"3.3.2.4 ", check3324, false},
+		{"3.3.2.5 ", check3325, false},
+		{"3.3.2.6 ", check3326, true},
+		{"3.3.2.7 ", check3327, false},
+		{"3.3.2.8 ", check3327, false},
+		{"3.3.2.9 ", check3327, false},
 	}
 	var errorEncountered bool
 
