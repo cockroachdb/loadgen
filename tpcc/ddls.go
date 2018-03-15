@@ -2,8 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"math"
+
+	"github.com/satori/go.uuid"
 )
 
 var ddls = [...]struct {
@@ -292,10 +295,12 @@ func splitTables(db *sql.DB, warehouses int) {
 	}
 
 	// Split the history table into 1000 ranges.
-	const maxVal = math.MaxInt64
-	const valsPerRange int64 = maxVal / 1000
+	const maxVal = math.MaxUint64
+	const valsPerRange uint64 = maxVal / 1000
 	for i := 1; i < 100; i++ {
-		sql := fmt.Sprintf("ALTER TABLE history SPLIT AT VALUES (%d)", int64(i)*valsPerRange)
+		var u uuid.UUID
+		binary.BigEndian.PutUint64(u[:], uint64(i)*valsPerRange)
+		sql := fmt.Sprintf("ALTER TABLE history SPLIT AT VALUES ('%s')", u.String())
 		if _, err := db.Exec(sql); err != nil {
 			panic(fmt.Sprintf("Couldn't exec %s: %s\n", sql, err))
 		}

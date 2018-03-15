@@ -20,7 +20,7 @@
     ".",
     "internal/lru",
     "internal/murmur",
-    "internal/streams"
+    "internal/streams",
   ]
   revision = "c79450b345f160eccb363f55095de6fd5e41b3e7"
 
@@ -29,7 +29,7 @@
   name = "github.com/golang/lint"
   packages = [
     ".",
-    "golint"
+    "golint",
   ]
   revision = "e14d9b0f1d332b1420c1ffa32562ad2dc84d645d"
 
@@ -50,7 +50,7 @@
   name = "github.com/kisielk/errcheck"
   packages = [
     ".",
-    "internal/errcheck"
+    "internal/errcheck",
   ]
   revision = "b1445a9dd8285a50c6d1661d16f0a9ceb08125f7"
 
@@ -59,7 +59,7 @@
   name = "github.com/kisielk/gotool"
   packages = [
     ".",
-    "internal/load"
+    "internal/load",
   ]
   revision = "d6ce6262d87e3a4e153e86023ff56ae771554a41"
 
@@ -68,7 +68,7 @@
   name = "github.com/lib/pq"
   packages = [
     ".",
-    "oid"
+    "oid",
   ]
   revision = "88edab0803230a3898347e77b474f8c1820a1f20"
 
@@ -77,6 +77,12 @@
   name = "github.com/pkg/errors"
   packages = ["."]
   revision = "30136e27e2ac8d167177e8a583aa4c3fea5be833"
+
+[[projects]]
+  name = "github.com/satori/go.uuid"
+  packages = ["."]
+  revision = "f58768cc1a7a7e77a3bd49e98cdd21419399b6a3"
+  version = "v1.2.0"
 
 [[projects]]
   branch = "master"
@@ -107,7 +113,7 @@
     "go/gcimporter15",
     "go/loader",
     "go/types/typeutil",
-    "imports"
+    "imports",
   ]
   revision = "ce871d178848e3eea1e8795e5cfb74053dde4bb9"
 
@@ -125,13 +131,13 @@
     "bson",
     "internal/json",
     "internal/sasl",
-    "internal/scram"
+    "internal/scram",
   ]
   revision = "3f83fa5005286a7fe593b055f0d7771a7dce4655"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "d98a23b139a9a0bcd29838ee454c0e9313facbd56324440fdfdb16edc000e4f9"
+  inputs-digest = "ab32958de83012df3a169d34cd05151193a4b2df1726140422e78c2d61173df5"
   solver-name = "gps-cdcl"
   solver-version = 1
