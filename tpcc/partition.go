@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"math"
+
+	"github.com/satori/go.uuid"
 )
 
 func configureZone(db *sql.DB, table, partition string, constraint int) {
@@ -211,19 +214,20 @@ func partitionCustomer(db *sql.DB, wIDs []int, partitions int) {
 }
 
 func partitionHistory(db *sql.DB, wIDs []int, partitions int) {
-	// NB: We use rand.Int63() to populate the history.rowid column. That
-	// function returns a non-negative 63-bit integer.
-	const maxVal = math.MaxInt64
-	rowids := make([]int, partitions+1)
+	const maxVal = math.MaxUint64
+	rowids := make([]uuid.UUID, partitions+1)
 	for i := 0; i < partitions; i++ {
-		rowids[i] = i * (maxVal / partitions)
+		// We're splitting the UUID rowid column evenly into N partitions. The
+		// column is sorted lexicographically on the bytes of the UUID which means
+		// we should put the partitioning values at the front of the UUID.
+		binary.BigEndian.PutUint64(rowids[i][:], uint64(i)*(maxVal/uint64(partitions)))
 	}
-	rowids[partitions] = maxVal
+	rowids[partitions], _ = uuid.FromString("ffffffff-ffff-ffff-ffff-ffffffffffff")
 
 	var buf bytes.Buffer
 	buf.WriteString("ALTER TABLE history PARTITION BY RANGE (rowid) (\n")
 	for i := 0; i < partitions; i++ {
-		fmt.Fprintf(&buf, "  PARTITION p%d VALUES FROM (%d) to (%d)", i, rowids[i], rowids[i+1])
+		fmt.Fprintf(&buf, "  PARTITION p%d VALUES FROM ('%s') to ('%s')", i, rowids[i], rowids[i+1])
 		if i+1 < partitions {
 			buf.WriteString(",")
 		}
