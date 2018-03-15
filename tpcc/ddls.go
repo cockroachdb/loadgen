@@ -75,6 +75,7 @@ create table customer (
 		// No PK necessary for this table.
 		ddl: `
 create table history (
+  rowid    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   h_c_id   integer,
   h_c_d_id integer,
   h_c_w_id integer,
