@@ -16,6 +16,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
 	"math/rand"
@@ -63,17 +64,11 @@ func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
 		db,
 		txOpts,
 		func(tx *sql.Tx) error {
-			// This is the only join in the application, so we don't need to worry about
-			// this setting persisting incorrectly across queries.
-			if _, err := tx.Exec(`set experimental_force_lookup_join=true`); err != nil {
-				return err
-			}
-
 			var dNextOID int
 			if err := tx.QueryRow(fmt.Sprintf(`
-				SELECT d_next_o_id
-				FROM district
-				WHERE d_w_id = %[1]d AND d_id = %[2]d`,
+                                SELECT d_next_o_id
+                                FROM district
+                                WHERE d_w_id = %[1]d AND d_id = %[2]d`,
 				wID, d.dID),
 			).Scan(&dNextOID); err != nil {
 				return err
@@ -81,18 +76,39 @@ func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
 
 			// Count the number of recently sold items that have a stock level below
 			// the threshold.
+			rows, err := tx.Query(fmt.Sprintf(`
+                                SELECT ol_i_id FROM order_line
+                                WHERE ol_w_id = %[1]d
+                                  AND ol_d_id = %[2]d
+                                  AND ol_o_id BETWEEN %[3]d - 20 AND %[3]d - 1`,
+				wID, d.dID, dNextOID),
+			)
+			if err != nil {
+				return err
+			}
+			var itemIds bytes.Buffer
+			first := true
+			for rows.Next() {
+				var itemId int
+				if err := rows.Scan(&itemId); err != nil {
+					return err
+				}
+				if !first {
+					itemIds.WriteString(",")
+				}
+				fmt.Fprintf(&itemIds, "%d", itemId)
+
+				first = false
+			}
+			rows.Close()
+
 			return tx.QueryRow(fmt.Sprintf(`
-				SELECT COUNT(DISTINCT(s_i_id))
-				FROM order_line
-				JOIN stock
-				ON s_i_id=ol_i_id
-				  AND s_w_id=ol_w_id
-				WHERE ol_w_id = %[1]d
-				  AND ol_d_id = %[2]d
-				  AND ol_o_id BETWEEN %[3]d - 20 AND %[3]d - 1
-				  AND s_quantity < %[4]d`,
-				wID, d.dID, dNextOID, d.threshold),
-			).Scan(&d.lowStock)
+                                SELECT COUNT(DISTINCT(s_i_id))
+                                FROM stock
+                                WHERE s_w_id = %[1]d
+                                  AND s_i_id IN (%[2]s)
+                                  AND s_quantity < %[3]d`,
+				wID, itemIds.String(), d.threshold)).Scan(&d.lowStock)
 		}); err != nil {
 		return nil, err
 	}
