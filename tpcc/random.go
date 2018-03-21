@@ -105,7 +105,7 @@ func randTax() float64 {
 // randInt returns a number within [min, max] inclusive.
 // See 2.1.4.
 func randInt(min, max int) int {
-	return rand.Intn(max-min) + min
+	return rand.Intn(max-min+1) + min
 }
 
 // See 4.3.2.3.
