@@ -55,7 +55,7 @@ func (s stockLevel) run(db *sql.DB, wID int, a *auditor) (interface{}, error) {
 	// within [10..20].
 	d := stockLevelData{
 		threshold: randInt(10, 20),
-		dID:       rand.Intn(9) + 1,
+		dID:       rand.Intn(10) + 1,
 	}
 
 	if err := crdb.ExecuteTx(

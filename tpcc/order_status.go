@@ -64,7 +64,7 @@ var _ tpccTx = orderStatus{}
 
 func (o orderStatus) run(db *sql.DB, wID int, a *auditor) (interface{}, error) {
 	d := orderStatusData{
-		dID: rand.Intn(9) + 1,
+		dID: rand.Intn(10) + 1,
 	}
 
 	// 2.6.1.2: The customer is randomly selected 60% of the time by last name
