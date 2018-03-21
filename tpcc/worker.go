@@ -40,6 +40,7 @@ type worker struct {
 		*hdrhistogram.WindowedHistogram
 		byOp []*hdrhistogram.WindowedHistogram
 	}
+	auditor *auditor
 }
 
 func clampLatency(d, min, max time.Duration) time.Duration {
@@ -64,7 +65,7 @@ const (
 const nTxTypes = 5
 
 type tpccTx interface {
-	run(db *sql.DB, wID int) (interface{}, error)
+	run(db *sql.DB, wID int, a *auditor) (interface{}, error)
 }
 
 type tx struct {
@@ -168,9 +169,9 @@ func initializeMix() {
 	}
 }
 
-func newWorker(i, warehouse int, db *sql.DB, wg *sync.WaitGroup) *worker {
+func newWorker(i, warehouse int, db *sql.DB, wg *sync.WaitGroup, a *auditor) *worker {
 	wg.Add(1)
-	w := &worker{idx: i, db: db, warehouse: warehouse}
+	w := &worker{idx: i, db: db, warehouse: warehouse, auditor: a}
 	w.latency.WindowedHistogram = hdrhistogram.NewWindowed(1,
 		minLatency.Nanoseconds(), maxLatency.Nanoseconds(), 1)
 
@@ -210,7 +211,7 @@ func (w *worker) run(errCh chan<- error) {
 		}
 
 		start := time.Now()
-		if _, err := t.run(w.db, w.warehouse); err != nil {
+		if _, err := t.run(w.db, w.warehouse, w.auditor); err != nil {
 			errCh <- errors.Wrapf(err, "error in %s", t.name)
 			continue
 		}

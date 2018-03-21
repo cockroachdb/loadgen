@@ -77,7 +77,7 @@ type payment struct{}
 
 var _ tpccTx = payment{}
 
-func (p payment) run(db *sql.DB, wID int) (interface{}, error) {
+func (p payment) run(db *sql.DB, wID int, a *auditor) (interface{}, error) {
 	d := paymentData{
 		dID: rand.Intn(10) + 1,
 		// hAmount is randomly selected within [1.00..5000.00]

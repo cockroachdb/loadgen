@@ -47,7 +47,7 @@ type delivery struct{}
 
 var _ tpccTx = newOrder{}
 
-func (del delivery) run(db *sql.DB, wID int) (interface{}, error) {
+func (del delivery) run(db *sql.DB, wID int, audit *auditor) (interface{}, error) {
 	oCarrierID := rand.Intn(10) + 1
 	olDeliveryD := time.Now()
 

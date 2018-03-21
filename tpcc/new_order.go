@@ -21,6 +21,7 @@ import (
 	"math/rand"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"context"
@@ -79,7 +80,8 @@ type newOrder struct{}
 
 var _ tpccTx = newOrder{}
 
-func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
+func (n newOrder) run(db *sql.DB, wID int, a *auditor) (interface{}, error) {
+	atomic.AddUint64(&a.newOrderTransactions, 1)
 	d := newOrderData{
 		wID:    wID,
 		dID:    randInt(1, 10),
@@ -203,6 +205,7 @@ func (n newOrder) run(db *sql.DB, wID int) (interface{}, error) {
 						// can't find the item. The spec requires us to actually go
 						// to the database for this, even though we know earlier
 						// that the item has an invalid number.
+						atomic.AddUint64(&a.newOrderRollbacks, 1)
 						return errSimulated
 					}
 					return errors.New("missing item row")
