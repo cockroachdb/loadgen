@@ -50,7 +50,7 @@ type stockLevel struct{}
 
 var _ tpccTx = stockLevel{}
 
-func (s stockLevel) run(db *sql.DB, wID int) (interface{}, error) {
+func (s stockLevel) run(db *sql.DB, wID int, a *auditor) (interface{}, error) {
 	// 2.8.1.2: The threshold of minimum quantity in stock is selected at random
 	// within [10..20].
 	d := stockLevelData{

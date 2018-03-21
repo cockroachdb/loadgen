@@ -62,7 +62,7 @@ type orderStatus struct{}
 
 var _ tpccTx = orderStatus{}
 
-func (o orderStatus) run(db *sql.DB, wID int) (interface{}, error) {
+func (o orderStatus) run(db *sql.DB, wID int, a *auditor) (interface{}, error) {
 	d := orderStatusData{
 		dID: rand.Intn(9) + 1,
 	}
