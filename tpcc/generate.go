@@ -213,7 +213,7 @@ VALUES `
 					// 10% of the customer rows have bad credit.
 					// See section 4.3, under the CUSTOMER table population section.
 					credit := goodCredit
-					if rand.Intn(9) == 0 {
+					if rand.Intn(10) == 0 {
 						// Poor 10% :(
 						credit = badCredit
 					}

@@ -71,7 +71,7 @@ func randAString(min, max int) string {
 // containing the string "ORIGINAL" somewhere in the middle of the string.
 // See 4.3.3.1.
 func randOriginalString() string {
-	if rand.Intn(9) == 0 {
+	if rand.Intn(10) == 0 {
 		l := randInt(26, 50)
 		off := randInt(0, l-8)
 		return randAString(off, off) + originalString + randAString(l-off-8, l-off-8)
