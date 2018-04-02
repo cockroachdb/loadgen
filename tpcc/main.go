@@ -86,7 +86,7 @@ func setupDatabase(parsedURL *url.URL, dbName string, nConns int) (*sql.DB, erro
 		return nil, err
 	}
 
-	if !*check {
+	if *check {
 		db.SetMaxOpenConns(nConns)
 		db.SetMaxIdleConns(nConns)
 	}
