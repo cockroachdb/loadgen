@@ -38,6 +38,7 @@ var maxRate = flag.Float64("max-rate", 0, "Maximum frequency of operations (read
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of blocks to read/write")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var usePrepared = flag.Bool("prepared", false, "Use prepared statement")
+var schemaName = flag.String("schema", "public", "Schema name")
 var pgHost = flag.String("host", "localhost", "database host name")
 var pgPort = flag.Int("port", 26257, "database port number")
 var pgUser = flag.String("user", "root", "database user name (without password)")
@@ -289,7 +290,11 @@ func main() {
 	db.SetMaxOpenConns(*concurrency + 1)
 	db.SetMaxIdleConns(*concurrency + 1)
 
-	rows, err := db.Query("SELECT column_name, data_type, column_default, is_nullable FROM information_schema.columns WHERE table_name = $1 and table_schema=$2", tableName, dbName)
+	// handle the information_schema convention change
+	// version | table_catalog table_schema table_name
+	// 1.x     | def           dbName       tableName
+	// 2.x     | dbName        public       tableName
+	rows, err := db.Query("SELECT column_name, data_type, column_default, is_nullable FROM information_schema.columns WHERE (table_catalog = 'def' and table_schema=$1 and table_name = $3) or (table_catalog = $1 and table_schema=$2 and table_name = $3 )", dbName, *schemaName, tableName)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -337,9 +342,9 @@ func main() {
 		log.Fatal("no columns detected")
 	}
 
-	// insert on conflict requires the primary key if any from information.schema
+	// insert on conflict requires the primary key. check information_schema if not specified on the command line
 	if strings.HasPrefix(*pgMethod, "ioc") && *pgPrimary == "" {
-		rows, err := db.Query("SELECT column_name FROM information_schema.key_column_usage WHERE constraint_name='primary' and table_name = $1 and table_schema=$2 order by ordinal_position", tableName, dbName)
+		rows, err := db.Query("SELECT column_name FROM information_schema.key_column_usage WHERE constraint_name='primary' and ((table_catalog = 'def' and table_schema=$1 and table_name = $3) or (table_catalog = $1 and table_schema=$2 and table_name = $3 )) order by ordinal_position", dbName, *schemaName, tableName)
 		if err != nil {
 			log.Fatal(err)
 		}
