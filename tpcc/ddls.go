@@ -296,8 +296,9 @@ func splitTables(db *sql.DB, warehouses int) {
 
 	// Split the history table into 1000 ranges.
 	const maxVal = math.MaxUint64
-	const valsPerRange uint64 = maxVal / 1000
-	for i := 1; i < 100; i++ {
+	const historyRanges = 1000
+	const valsPerRange uint64 = maxVal / historyRanges
+	for i := 1; i < historyRanges; i++ {
 		var u uuid.UUID
 		binary.BigEndian.PutUint64(u[:], uint64(i)*valsPerRange)
 		sql := fmt.Sprintf("ALTER TABLE history SPLIT AT VALUES ('%s')", u.String())
