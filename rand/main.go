@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/codahale/hdrhistogram"
+	"github.com/satori/go.uuid"
 	"github.com/tylertreat/hdrhistogram-writer"
 	"golang.org/x/time/rate"
 
@@ -137,6 +138,8 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 						params[k] = sql.NullString{Valid: false}
 					case "DATE", "TIMESTAMP":
 						params[k] = pq.NullTime{Valid: false}
+					case "UUID":
+						params[k] = uuid.NullUUID{Valid: false}
 					default:
 						log.Fatalf("Unsupported nullable type %s", c.dataType)
 					}
@@ -175,6 +178,9 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 						}
 					case "DATE", "TIMESTAMP":
 						params[k] = time.Unix(rand.Int63n(time.Now().Unix()-94608000)+94608000, 0)
+					case "UUID":
+						uuid, _ := uuid.NewV4()
+						params[k] = uuid.String()
 					default:
 						log.Fatalf("Unsupported type %s", c.dataType)
 					}
