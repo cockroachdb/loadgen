@@ -179,13 +179,13 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 					case "DATE", "TIMESTAMP":
 						params[k] = time.Unix(rand.Int63n(time.Now().Unix()-94608000)+94608000, 0)
 					case "UUID":
-						uuid, _ := uuid.NewV4()
+						uuid := uuid.NewV4()
 						params[k] = uuid.String()
 					default:
 						log.Fatalf("Unsupported type %s", c.dataType)
 					}
 				}
-				k += 1
+				k++
 			}
 		}
 
@@ -250,7 +250,7 @@ func getInsertStmt(db *sql.DB, dbName, tableName string, cols []col) (*sql.Stmt,
 			buf.WriteString(", ")
 		}
 		buf.WriteString("(")
-		for j, _ := range cols {
+		for j := range cols {
 			if j > 0 {
 				buf.WriteString(", ")
 			}
@@ -310,38 +310,38 @@ func main() {
 
 	defer rows.Close()
 	for rows.Next() {
-		var col col
-		col.dataPrecision = 0
-		col.dataScale = 0
+		var c col
+		c.dataPrecision = 0
+		c.dataScale = 0
 
-		if err := rows.Scan(&col.name, &col.dataType, &col.cdefault, &col.isNullable); err != nil {
+		if err := rows.Scan(&c.name, &c.dataType, &c.cdefault, &c.isNullable); err != nil {
 			log.Fatal(err)
 		}
-		if col.cdefault.String == "unique_rowid()" { // skip
+		if c.cdefault.String == "unique_rowid()" { // skip
 			continue
 		}
-		if strings.HasPrefix(col.cdefault.String, "uuid_v4()") { // skip
+		if strings.HasPrefix(c.cdefault.String, "uuid_v4()") { // skip
 			continue
 		}
 
 		// ex: convert
 		// DECIMAL(15,2) to DECIMAL 15 2
 		// STRING(2) to STRING 20
-		dataTypes := strings.FieldsFunc(col.dataType, func(r rune) bool { return r == '(' || r == ',' || r == ')' })
+		dataTypes := strings.FieldsFunc(c.dataType, func(r rune) bool { return r == '(' || r == ',' || r == ')' })
 		if len(dataTypes) > 1 {
-			col.dataType = dataTypes[0]
-			if col.dataPrecision, err = strconv.Atoi(dataTypes[1]); err != nil {
+			c.dataType = dataTypes[0]
+			if c.dataPrecision, err = strconv.Atoi(dataTypes[1]); err != nil {
 				log.Fatal(err)
 			}
 		}
 		if len(dataTypes) > 2 {
-			if col.dataScale, err = strconv.Atoi(dataTypes[2]); err != nil {
+			if c.dataScale, err = strconv.Atoi(dataTypes[2]); err != nil {
 				log.Fatal(err)
 			}
 		}
 
-		cols = append(cols, col)
-		numCols += 1
+		cols = append(cols, c)
+		numCols++
 	}
 
 	if numCols == 0 {
