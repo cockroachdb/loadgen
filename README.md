@@ -5,7 +5,19 @@ CockroachDB (and on occasion, other databases).
 
 # Building
 
-`make build` will build all load generators. The binaries can be found
+Please use the following steps to setup:
+
+1. `go get -v github.com/golang/lint`
+2. `go get -v github.com/kisielk/errcheck/internal/errcheck`
+3. `go get -v github.com/kisielk/gotool`
+4. Put "loadgen" aside with your cockroachdb source code like the following:
+
+```
+$ ls ~/go/src/github.com/cockroachdb
+cockroach  loadgen
+```
+
+5. `make build` will build all load generators. The binaries can be found
 in the individual directories (`kv/kv`, `tpcc/tpcc`,`tpch/tpch`,
 `ycsb/ycsb`, and `rand/rand`).
 
