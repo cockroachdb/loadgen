@@ -39,6 +39,7 @@ var maxRate = flag.Float64("max-rate", 0, "Maximum frequency of operations (read
 var maxOps = flag.Uint64("max-ops", 0, "Maximum number of blocks to read/write")
 var tolerateErrors = flag.Bool("tolerate-errors", false, "Keep running on error")
 var usePrepared = flag.Bool("prepared", false, "Use prepared statement")
+var useColName = flag.Bool("colnames", true, "Use column names in DML")
 var schemaName = flag.String("schema", "public", "Schema name")
 var pgHost = flag.String("host", "localhost", "database host name")
 var pgPort = flag.Int("port", 26257, "database port number")
@@ -64,12 +65,15 @@ var usage = func() {
 }
 
 type col struct {
-	name          string
-	dataType      string
-	dataPrecision int
-	dataScale     int
-	cdefault      sql.NullString
-	isNullable    string
+	name                  string
+	dataType              string
+	dataPrecision         int
+	dataScale             int
+	cdefault              sql.NullString
+	isNullable            string
+	generation_expression string
+	indices               string
+	is_hidden             bool
 }
 
 func clampLatency(d, min, max time.Duration) time.Duration {
@@ -134,7 +138,7 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 						params[k] = sql.NullFloat64{Valid: false}
 					case "DECIMAL", "INT8", "BIGINT", "INT", "INTEGER", "INT4", "SMALLINT", "INT2":
 						params[k] = sql.NullInt64{Valid: false}
-					case "BYTES", "STRING":
+					case "BYTES", "STRING", "CHAR", "VARCHAR":
 						params[k] = sql.NullString{Valid: false}
 					case "DATE", "TIMESTAMP":
 						params[k] = pq.NullTime{Valid: false}
@@ -151,7 +155,13 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 						} else {
 							params[k] = true
 						}
-					case "DECIMAL", "FLOAT":
+					case "DECIMAL":
+						if c.dataPrecision == c.dataScale {
+							params[k] = 0.1
+						} else {
+							params[k] = rand.Intn(100)
+						}
+					case "FLOAT":
 						params[k] = rand.Intn(100)
 					case "BIGINT", "INT8":
 						params[k] = rand.Int63()
@@ -170,7 +180,7 @@ func (b *worker) run(errCh chan<- error, wg *sync.WaitGroup, limiter *rate.Limit
 							log.Fatal(err)
 						}
 						params[k] = fmt.Sprintf("%X", b)
-					case "STRING":
+					case "CHAR", "VARCHAR", "STRING":
 						if c.dataPrecision == 0 {
 							params[k] = randString(32)
 						} else {
@@ -229,20 +239,24 @@ func getInsertStmt(db *sql.DB, dbName, tableName string, cols []col) (*sql.Stmt,
 			if i > 0 {
 				dmlSuffix.WriteString(",")
 			}
-			dmlSuffix.WriteString(fmt.Sprintf("%s=EXCLUDED.%s", c.name, c.name))
+			dmlSuffix.WriteString(fmt.Sprintf("\"%s\"=EXCLUDED.\"%s\"", c.name, c.name))
 		}
 	default:
 		log.Fatal(fmt.Sprintf("%s DML method not valid", *pgMethod))
 	}
 
-	fmt.Fprintf(&buf, `%s INTO %s.%s (`, dmlMethod, dbName, tableName)
-	for i, c := range cols {
-		if i > 0 {
-			buf.WriteString(",")
+	fmt.Fprintf(&buf, `%s INTO %s.%s `, dmlMethod, dbName, tableName)
+	if *useColName {
+		buf.WriteString("(")
+		for i, c := range cols {
+			if i > 0 {
+				buf.WriteString(",")
+			}
+			buf.WriteString("\"" + c.name + "\"")
 		}
-		buf.WriteString(c.name)
+		buf.WriteString(")")
 	}
-	buf.WriteString(`) VALUES `)
+	buf.WriteString(` VALUES `)
 
 	nCols := len(cols)
 	for i := 0; i < *batch; i++ {
@@ -300,7 +314,11 @@ func main() {
 	// version | table_catalog table_schema table_name
 	// 1.x     | def           dbName       tableName
 	// 2.x     | dbName        public       tableName
-	rows, err := db.Query("SELECT column_name, data_type, column_default, is_nullable FROM information_schema.columns WHERE (table_catalog = 'def' and table_schema=$1 and table_name = $3) or (table_catalog = $1 and table_schema=$2 and table_name = $3 )", dbName, *schemaName, tableName)
+	query := fmt.Sprintf("show columns from \"%s\".\"%s\"", dbName, tableName)
+	if testing.Verbose() {
+		fmt.Println(query)
+	}
+	rows, err := db.Query(query)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -314,7 +332,7 @@ func main() {
 		c.dataPrecision = 0
 		c.dataScale = 0
 
-		if err := rows.Scan(&c.name, &c.dataType, &c.cdefault, &c.isNullable); err != nil {
+		if err := rows.Scan(&c.name, &c.dataType, &c.isNullable, &c.cdefault, &c.generation_expression, &c.indices, &c.is_hidden); err != nil {
 			log.Fatal(err)
 		}
 		if c.cdefault.String == "unique_rowid()" { // skip
@@ -326,7 +344,7 @@ func main() {
 
 		// ex: convert
 		// DECIMAL(15,2) to DECIMAL 15 2
-		// STRING(2) to STRING 20
+		// STRING(2) to STRING 2
 		dataTypes := strings.FieldsFunc(c.dataType, func(r rune) bool { return r == '(' || r == ',' || r == ')' })
 		if len(dataTypes) > 1 {
 			c.dataType = dataTypes[0]
