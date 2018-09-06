@@ -3,18 +3,23 @@
 
 [[projects]]
   branch = "master"
+  digest = "1:c05e492e19a0704f4fee4d546ca899586c176b73f31c4a06051473ea75e7eaa2"
   name = "github.com/cockroachdb/cockroach-go"
   packages = ["crdb"]
+  pruneopts = ""
   revision = "59c0560478b705bf9bd12f9252224a0fad7c87df"
 
 [[projects]]
   branch = "master"
+  digest = "1:c46fd324e7902268373e1b337436a6377c196e2dbd7b35624c6256d29d494e78"
   name = "github.com/codahale/hdrhistogram"
   packages = ["."]
+  pruneopts = ""
   revision = "3a0bb77429bd3a61596f5e8a3172445844342120"
 
 [[projects]]
   branch = "master"
+  digest = "1:5ff509d59e30d5048f09f1cb610d99892d96ce7f352da8fa8e2f490141d2e365"
   name = "github.com/gocql/gocql"
   packages = [
     ".",
@@ -22,88 +27,112 @@
     "internal/murmur",
     "internal/streams",
   ]
+  pruneopts = ""
   revision = "c79450b345f160eccb363f55095de6fd5e41b3e7"
 
 [[projects]]
   branch = "master"
+  digest = "1:f20d32103a32bfa670cc00c7cb3fcc93321ddd9722ef5464237c8eb8ee703af8"
   name = "github.com/golang/lint"
   packages = [
     ".",
     "golint",
   ]
+  pruneopts = ""
   revision = "e14d9b0f1d332b1420c1ffa32562ad2dc84d645d"
 
 [[projects]]
   branch = "master"
+  digest = "1:09307dfb1aa3f49a2bf869dcfa4c6c06ecd3c207221bd1c1a1141f0e51f209eb"
   name = "github.com/golang/snappy"
   packages = ["."]
+  pruneopts = ""
   revision = "553a641470496b2327abcac10b36396bd98e45c9"
 
 [[projects]]
   branch = "master"
+  digest = "1:60b7bc5e043a11213472ae05252527287d20e0a6ccc18f6ae67fad88e41004de"
   name = "github.com/hailocab/go-hostpool"
   packages = ["."]
+  pruneopts = ""
   revision = "e80d13ce29ede4452c43dea11e79b9bc8a15b478"
 
 [[projects]]
   branch = "master"
+  digest = "1:c823aadce12dd3fe10e1780e96da621b2cf9bfe26b6a9588c79d42a546fb5e69"
   name = "github.com/kisielk/errcheck"
   packages = [
     ".",
     "internal/errcheck",
   ]
+  pruneopts = ""
   revision = "b1445a9dd8285a50c6d1661d16f0a9ceb08125f7"
 
 [[projects]]
   branch = "master"
+  digest = "1:27c5ce7934e1ca0b03607f974b4d8af35b97fff7e8b2c919eccae7bc3dd4baca"
   name = "github.com/kisielk/gotool"
   packages = [
     ".",
     "internal/load",
   ]
+  pruneopts = ""
   revision = "d6ce6262d87e3a4e153e86023ff56ae771554a41"
 
 [[projects]]
   branch = "master"
+  digest = "1:d724d8f68ff551065e0335b21642361e224cee973c242bf70683e487291a613e"
   name = "github.com/lib/pq"
   packages = [
     ".",
     "oid",
   ]
+  pruneopts = ""
   revision = "88edab0803230a3898347e77b474f8c1820a1f20"
 
 [[projects]]
   branch = "master"
+  digest = "1:0462f976b22bd6c9cdb5ccebcd6630bef713b0658d2319433012f1d9889af22d"
   name = "github.com/pkg/errors"
   packages = ["."]
+  pruneopts = ""
   revision = "30136e27e2ac8d167177e8a583aa4c3fea5be833"
 
 [[projects]]
+  digest = "1:7f569d906bdd20d906b606415b7d794f798f91a62fcfb6a4daa6d50690fb7a3f"
   name = "github.com/satori/go.uuid"
   packages = ["."]
+  pruneopts = ""
   revision = "f58768cc1a7a7e77a3bd49e98cdd21419399b6a3"
   version = "v1.2.0"
 
 [[projects]]
   branch = "master"
+  digest = "1:a8e814d59663b85edae4ebd259a71ae8b63b58268c0b95b3414aaeaa6250cdb6"
   name = "github.com/tylertreat/hdrhistogram-writer"
   packages = ["."]
+  pruneopts = ""
   revision = "d105e3c15daaac745539bdd3e4a1f743b8feda09"
 
 [[projects]]
   branch = "master"
+  digest = "1:db213c367815dbda49407c97f22fed3ad2805e01570c7c0a3c3ec76332bc790d"
   name = "golang.org/x/net"
   packages = ["context"]
+  pruneopts = ""
   revision = "dc948dff8834a7fe1ca525f8d04e261c2b56e70d"
 
 [[projects]]
   branch = "master"
+  digest = "1:962626db478d8aa0ae5a1d99c2b367acc756346c6657780a91252cfda66a67d3"
   name = "golang.org/x/time"
   packages = ["rate"]
+  pruneopts = ""
   revision = "6dc17368e09b0e8634d71cac8168d853e869a0c7"
 
 [[projects]]
   branch = "master"
+  digest = "1:82ca2b7d523fd69bd1c0dbec5b808667ad5df2bc82ab5756d08fbdd1d2f6a78b"
   name = "golang.org/x/tools"
   packages = [
     "cmd/goimports",
@@ -115,16 +144,20 @@
     "go/types/typeutil",
     "imports",
   ]
+  pruneopts = ""
   revision = "ce871d178848e3eea1e8795e5cfb74053dde4bb9"
 
 [[projects]]
+  digest = "1:e5d1fb981765b6f7513f793a3fcaac7158408cca77f75f7311ac82cc88e9c445"
   name = "gopkg.in/inf.v0"
   packages = ["."]
+  pruneopts = ""
   revision = "3887ee99ecf07df5b447e9b00d9c0b2adaa9f3e4"
   version = "v0.9.0"
 
 [[projects]]
   branch = "v2"
+  digest = "1:c80894778314c7fb90d94a5ab925214900e1341afeddc953cda7398b8cdcd006"
   name = "gopkg.in/mgo.v2"
   packages = [
     ".",
@@ -133,11 +166,27 @@
     "internal/sasl",
     "internal/scram",
   ]
+  pruneopts = ""
   revision = "3f83fa5005286a7fe593b055f0d7771a7dce4655"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "ab32958de83012df3a169d34cd05151193a4b2df1726140422e78c2d61173df5"
+  input-imports = [
+    "github.com/cockroachdb/cockroach-go/crdb",
+    "github.com/codahale/hdrhistogram",
+    "github.com/gocql/gocql",
+    "github.com/golang/lint/golint",
+    "github.com/kisielk/errcheck",
+    "github.com/lib/pq",
+    "github.com/pkg/errors",
+    "github.com/satori/go.uuid",
+    "github.com/tylertreat/hdrhistogram-writer",
+    "golang.org/x/net/context",
+    "golang.org/x/time/rate",
+    "golang.org/x/tools/cmd/goimports",
+    "gopkg.in/mgo.v2",
+    "gopkg.in/mgo.v2/bson",
+  ]
   solver-name = "gps-cdcl"
   solver-version = 1
