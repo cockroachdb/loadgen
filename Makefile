@@ -20,7 +20,7 @@ GOFLAGS :=
 # Set to 1 to use static linking for all builds (including tests).
 STATIC :=
 
-PKG := kv ycsb tpcc tpch querybench interleave rand
+PKG := interleave rand
 GOPKG := $(patsubst %,./%,$(PKG))
 
 ifeq ($(STATIC),1)
